@@ -335,7 +335,9 @@ static void connect_socket(void) {
     if (fd < 0)
         die(2, "socket: %s", strerror(errno));
     struct sockaddr_un addr = {.sun_family = AF_UNIX};
-    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", path);
+    if (strlen(path) >= sizeof(addr.sun_path))
+        die(2, "wayland socket path too long: %s", path);
+    memcpy(addr.sun_path, path, strlen(path) + 1);
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
         die(2, "connect %s: %s", path, strerror(errno));
 }
