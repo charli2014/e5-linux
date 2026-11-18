@@ -184,10 +184,22 @@ class Ops:
         return False
 
     def wakelocks(self):
+        # SIPA holds a kernel wakeup source, invisible in sys/power/wake_lock
+        # (userspace locks only); wakeup_sources active_since is nonzero while
+        # held. Unreadable state fails closed so DEEP cannot guess it away.
         try:
-            return (self.root / 'sys/power/wake_lock').read_text().split()
+            names = (self.root / 'sys/power/wake_lock').read_text().split()
         except OSError:
-            return ['unknown']
+            names = ['unknown']
+        try:
+            rows = (self.root / 'sys/kernel/debug/wakeup_sources').read_text().splitlines()
+        except OSError:
+            return names + ['unknown']
+        for row in rows[1:]:
+            fields = row.split()
+            if len(fields) >= 6 and fields[5] != '0':
+                names.append(fields[0])
+        return names
 
     def suspend(self, test):
         try:
@@ -308,9 +320,12 @@ class Machine:
         self.ops.log('IDLE: radios/BT/SIM polling off, hotspot kept')
 
     def enter_deep(self, now):
+        locks = self.ops.wakelocks()
         if self.ops.audio_running():
             self.deep_blocked = 'audio playing'
-        elif any('sipa' in name.lower() for name in self.ops.wakelocks()):
+        elif 'unknown' in locks:
+            self.deep_blocked = 'wakelock state unreadable'
+        elif any('sipa' in name.lower() for name in locks):
             self.deep_blocked = 'SIPA wakelock still held'
         else:
             self.deep_blocked = None

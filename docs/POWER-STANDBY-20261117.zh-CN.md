@@ -142,3 +142,28 @@ etc/init.d/e5-power（S97 启动，K05 停止——先于 modem 属主恢复射�
 - 在线 sysfs 项（UFS host 从不挂起、dwc3 时钟未门控、wq 只读、
   AT+CLAC 不支持）已排除，无收益证据，不做。
 - 未移除 clk_ignore_unused / pd_ignore_unused / regulator_ignore_unused。
+## 2026-11-18 DEEP 门修复：SIPA 内核唤醒锁此前不可见
+
+缺陷（真机只读核查确认）：wakelocks() 只读 /sys/power/wake_lock，那里只有
+用户态锁。SIPA 的锁是内核 wakeup source，只出现在
+/sys/kernel/debug/wakeup_sources。真机 wake_lock 为空，而
+soc:ipa-apb:sipa-dele 的 active_since 非零（持锁约占运行时间 93%），
+旧门会误判"无 SIPA 锁"而放行 DEEP。
+
+改动：
+- openwrt/overlay/usr/libexec/e5-power-state：wakelocks() 合并 wake_lock
+  与 wakeup_sources 中活动条目（第 6 列 active_since 非零即持锁）；
+  任一接口不可读时返回 unknown，enter_deep 对 unknown 阻塞
+  （wakelock state unreadable），fail-closed，不猜。
+- devices/test_power_state.py：新增 6 项（内核锁可见、已释放不列、
+  用户态锁保留、两向不可读 fail-closed、门阻塞 unknown），共 34 项。
+
+验证：真机 Linux python3 全 34 项通过（/tmp 临时目录运行后即删）。
+Windows 本地跑会因 NTFS mtime 分辨率使 reload 漏读配置变更而随机失败，
+与本改动无关；CI Linux 跑同一测试为权威（changxing60-release.yml）。
+真机取证证据在工作区 work/power-audit/（不上传）。
+
+澄清：上文"未移除 clk_ignore_unused / pd_ignore_unused /
+regulator_ignore_unused"是 M8/T551M 时期历史表述。畅行60 真机
+/proc/cmdline 从来没有这三个参数，test_profile.py 也禁止加入，
+"逐个移除"试验不适用于本机。

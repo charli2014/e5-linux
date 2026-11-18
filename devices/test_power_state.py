@@ -190,6 +190,16 @@ class PowerTest(unittest.TestCase):
         self.assertEqual(self.machine.state, 'IDLE')
         self.assertEqual(self.machine.deep_blocked, 'audio playing')
 
+    def test_deep_blocked_by_unreadable_wakelocks(self):
+        self.write_config(idle_min=1, deep_min=1)
+        self.reach_idle()
+        self.ops.locks = ['unknown']
+        self.advance(60)
+        self.advance(60)
+        self.assertEqual(self.machine.state, 'IDLE')
+        self.assertEqual(self.machine.deep_blocked, 'wakelock state unreadable')
+        self.assertNotIn(('suspend', False), self.ops.calls)
+
     def test_deep_resume_after_blocked_retry(self):
         self.write_config(idle_min=1, deep_min=1)
         self.reach_idle()
@@ -359,6 +369,46 @@ class SuspendStagingTest(unittest.TestCase):
         error = self.ops.suspend(True)
         self.assertIsNotNone(error)
         self.assertEqual((self.root / 'sys/power/pm_test').read_text(), 'none\n')
+
+
+class WakelockReadTest(unittest.TestCase):
+    """Ops.wakelocks against a fake sysfs tree, rows in device tab format."""
+
+    HEADER = ('name\tactive_count\tevent_count\twakeup_count\texpire_count\t'
+              'active_since\ttotal_time\tmax_time\tlast_change\tprevent_suspend_time\n')
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / 'sys/power').mkdir(parents=True)
+        (self.root / 'sys/kernel/debug').mkdir(parents=True)
+        (self.root / 'sys/power/wake_lock').write_text('')
+        self.ops = Ops(self.root)
+
+    def write_sources(self, rows):
+        (self.root / 'sys/kernel/debug/wakeup_sources').write_text(self.HEADER + rows)
+
+    def test_active_kernel_sipa_lock_visible_with_empty_wake_lock(self):
+        self.write_sources('soc:ipa-apb:sipa-dele\t20\t20\t0\t0\t33359\t548035\t251972\t576815\t0\n')
+        self.assertIn('soc:ipa-apb:sipa-dele', self.ops.wakelocks())
+
+    def test_released_kernel_source_not_listed(self):
+        self.write_sources('sipa_dele\t20480\t20480\t0\t0\t0\t548035\t251972\t576815\t0\n')
+        self.assertEqual(self.ops.wakelocks(), [])
+
+    def test_userspace_locks_still_listed(self):
+        (self.root / 'sys/power/wake_lock').write_text('e5-upgrade\n')
+        self.write_sources('')
+        self.assertEqual(self.ops.wakelocks(), ['e5-upgrade'])
+
+    def test_unreadable_sources_fail_closed(self):
+        self.assertIn('unknown', self.ops.wakelocks())
+
+    def test_unreadable_wake_lock_fail_closed(self):
+        (self.root / 'sys/power/wake_lock').unlink()
+        self.write_sources('')
+        self.assertIn('unknown', self.ops.wakelocks())
 
 
 if __name__ == '__main__':
