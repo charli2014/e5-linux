@@ -7,8 +7,8 @@
 
 | job | 运行器 | 内容 |
 |---|---|---|
-| `kernel` | ubuntu-24.04-arm | 公开内核源码 `Enceka/linux-lts-e5`（默认提交 `020b970e`，即本机登记的 UMS9620 供体基线）+ 引导包中的基线 config，跑 `devices/changxing60/build-kernel.py`（含 prepare-kernel 补丁与全部板级测试），产出内核交付 tar |
-| `build` | ubuntu-24.04-arm | 还原引导输入 → `prepare-installers` 下载版本锁定的三平台安装器（sha256 + 源码指纹双校验）→ 导入 OpenWrt 25.12.5 armsr 基础镜像 → 省电/更新保留测试 → 编译 ModemManager/BlueZ/原生屏组件（带缓存）与 guarded block-mount → `sudo tools/build-release.py package --profiles changxing60`（唯一发布入口，Android 安装器由 input_check 自动构建）→ 校验 zip、写 SHA256SUMS 与发布说明 |
+| `kernel` | ubuntu-24.04-arm | 公开内核源码 `Enceka/linux-lts-e5`（默认提交 `020b970e`，即本机登记的 UMS9620 供体基线）+ 仓库内种子基线 config，跑 `devices/changxing60/build-kernel.py`（含 prepare-kernel 补丁与全部板级测试），产出内核交付 tar |
+| `build` | ubuntu-24.04-arm | 还原种子与锁定 clean base → `prepare-installers` 下载版本锁定的三平台安装器（sha256 + 源码指纹双校验）→ 导入 OpenWrt 25.12.5 armsr 基础镜像 → 省电/更新保留测试 → 编译 ModemManager/BlueZ/wifi-sae/iwinfo/lpac/原生屏组件（带缓存）与 guarded block-mount → `ci-inputs.py create` 引导门槛自检 → `sudo tools/build-release.py package --profiles changxing60`（唯一发布入口，Android 安装器由 input_check 自动构建）→ 校验 zip、写 SHA256SUMS 与发布说明 |
 | `publish` | ubuntu-24.04 | 沿用 E5 的草稿 Release 流程：校验哈希 → 建草稿 → 上传 → 发布；已发布的 tag 拒绝覆盖 |
 
 安装器不在 CI 从源码编译，而是走 `tools/installer-inputs.lock.json` 锁定的
@@ -18,43 +18,42 @@ cp1252 编码/反斜杠路径语义，macOS 无 `os.listxattr`、/var 别名解�
 子模块仓库不在本 fork 名下、无法推送修复；锁定下载同样经过哈希与源码
 指纹校验，不削弱验证。E5 的 `release.yml` 仍走源码编译，不受影响。
 
-内核源码是公开仓库，**不需要公开任何厂商源码**。私有输入只有引导包
-（见下），与 E5 的 `E5_CI_INPUTS_URL` 机制相同。
+内核源码是公开仓库，**不需要公开任何厂商源码**。流水线自足：不需要
+仓库 Variables、不需要设备 SSH、不需要外部构建机，全部输入来自仓库
+本身与本 fork 的一个锁定 Release 资产。
 
-## 一次性准备（在构建机上执行）
+## 输入来源（自足设计）
 
-引导包把本机登记的输入固化成哈希锁定的归档，供 CI 还原：
+CI 需要而干净 checkout 没有的输入分三类：
 
-- `dumps/changxing60-stock/boot_a.img`、`misc-head.bin` → 只保留
-  Android 头/vbmeta/footer 与 bootloader_control 的模板（剥离原厂内核与其余内容）；
-- `{workspace}/kernels/m8/config` → UMS9620 基线 config（校验两个登记标记）；
-- `{workspace}/base/e5` → 干净 base（必须含 `sbin/sysupgrade.openwrt`，
-  不得含 wcnmodem.bin、opt/e5/android 等设备专属内容）；
-- `work/e5-port/clean-openwrt-base.tar`、`work/wifi-sae`、`work/iwinfo-ap-scan`、
-  `{workspace}/artifacts/lpac` → 打包前分别过各自 state 脚本的 inspect。
+1. **小件种子**（提交在 `devices/changxing60/ci-seeds/`，由
+   `tools/ci-seeds.py` 还原并自检）：
+   - `boot_a.template.gz`、`misc-head.bin`：只保留 Android 头/vbmeta/footer
+     与 bootloader_control 的模板（剥离原厂内核与其余内容）；
+   - `ums9620-base.config`：UMS9620 基线 config（校验两个登记标记）；
+   - `busybox`：静态 ARM64 busybox（校验 ELF 机器号 183）。
+   均取自 r20261114 已发布安装包，不含厂商固件、原厂内核或设备凭据。
+2. **clean base 与出厂默认配置**（太大不进 git）：从 r20261114 安装包的
+   `openwrt.ext4.gz` 提取根文件系统，剔除 `etc/config`、`etc/e5`、
+   `lib/modules`、`opt/e5/android`、`lib/firmware/wcnmodem.bin` 与全部
+   身份/凭据路径后打成 `base-e5.tar.gz`；20 个出厂默认配置单独打成
+   `clean-openwrt-base.tar`。两者合装为 `cx60-ci-base.tar.gz`，以 4 个
+   ≤40MB 分片上传到本 fork 的 `ci-inputs-25.12.5` Release（长上传在部分
+   网络会被重置，分片更稳）。`tools/ci-base.lock.json` 锁定下载地址、
+   整包与每个分片的 SHA-256；`tools/ci-seeds.py` 下载、逐片校验、拼接、
+   再校验整包后才解包。base 必须含 `sbin/sysupgrade.openwrt`，不得含
+   设备专属内容（`ci-inputs.py create` 门槛复检）。
+3. **补丁 APK**（wifi-sae / iwinfo-ap-scan / lpac / ModemManager / BlueZ /
+   block-mount / 原生屏组件）：全部由 CI 用仓库内脚本现编，带源码指纹
+   缓存；不再随引导包分发，源码改动后自动重编，不会过期。
 
-```sh
-cd e5-linux
-python3 tools/ci-inputs.py create --profile changxing60 \
-  --workspace /home/kano/openwrt-build
-# 产出 out/cx60-ci-inputs.tar.gz 与 out/cx60-ci-inputs.tar.gz.sha256
-```
+组装前跑 `tools/ci-inputs.py create --profile changxing60` 作为门槛：
+对全部输入逐项 inspect 并打出引导包 SHA-256（写入发布说明）。门槛拒绝
+base 里的设备载荷；门槛通过后补建空目录 `base/e5/opt/e5/android`
+（prepare-root 要求该挂载点存在且为空）。
 
-各输入路径都可以用 `--boot/--misc/--base-config/--base-dir/--defaults/
---wifi-apks/--iwinfo-apks/--lpac-apks` 覆盖。归档创建时即自检
-（`inspect`），还原时先对 SHA-256 再逐项复检。
-
-然后把归档放到一个固定 HTTPS 地址（例如本 fork 的一个专用 Release 资产，
-或任何长期稳定的 HTTPS 下载点），在仓库
-**Settings → Secrets and variables → Actions → Variables** 新建：
-
-| 变量 | 值 |
-|---|---|
-| `E5_CX60_CI_INPUTS_URL` | 归档的 HTTPS 下载地址 |
-| `E5_CX60_CI_INPUTS_SHA256` | `.sha256` 文件中的 64 位哈希 |
-
-引导包不含厂商固件、完整原厂镜像或设备转储；boot/misc 模板只含启动
-控制所需的最小结构。但它仍属于构建输入，放在自己控制的地址即可。
+更换 base 版本时：重新提取、打包、分片上传到新 Release，更新
+`tools/ci-base.lock.json` 的 url 与哈希即可；种子与 APK 无需改动。
 
 ## 触发方式
 
@@ -78,10 +77,10 @@ Release 资产：`changxing60-*.zip`（安装包，含 Windows/macOS/Android 安
 
 ## 已知约束
 
-1. **引导包会过期。** wifi-sae / iwinfo / lpac / block-mount 的 inspect 与
-   build-id 按仓库当前源码计算；改了这些源码后旧引导包会在 input_check
-   被拒（报 source mismatch），需在构建机重新 `create` 并更新两个变量。
-   基线 config、base、模板同理。
+1. **种子与 base 锁按基线固定。** 补丁 APK 由 CI 现编，源码改动自动重编，
+   不会过期；但基线 config、boot/misc 模板、busybox 与 clean base 更换时，
+   需更新 `devices/changxing60/ci-seeds/` 或 `tools/ci-base.lock.json`
+   （重新上传分片资产），否则门槛会拒绝不匹配的输入。
 2. **安装器锁。** `installer` 子模块提交必须与
    `tools/installer-inputs.lock.json` 一致（与 E5 发布同一把锁）；
    `prepare-installers` 按锁下载并校验三平台构件，子模块更新而锁未更新时

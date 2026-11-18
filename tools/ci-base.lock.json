@@ -1,0 +1,25 @@
+{
+  "format": 1,
+  "openwrt_version": "25.12.5",
+  "source_package": "changxing60-openwrt-25.12.5-r20261114.170704-g3409d23c-s3fe0",
+  "url": "https://github.com/charli2014/e5-linux/releases/download/ci-inputs-25.12.5/cx60-ci-base.tar.gz",
+  "sha256": "f5c2c2cf842fe784b88a8236810aedc9ffba0ceae169da75dfcfb307c7bd3427",
+  "parts": [
+    {
+      "name": "cx60-ci-base.tar.gz.part-00",
+      "sha256": "bcc3aa662920e914b1af5de70dab567f8d3d42c4b84b18d5c87f498b805328ff"
+    },
+    {
+      "name": "cx60-ci-base.tar.gz.part-01",
+      "sha256": "2932ebc969febe793f4f4a6b7cf7f6419024db5e4fb53a147c69be9577210a59"
+    },
+    {
+      "name": "cx60-ci-base.tar.gz.part-02",
+      "sha256": "f33391cc5eb6d9580a39654d19fff5fc015d961495d1d3fb6f44cb0266b8a08a"
+    },
+    {
+      "name": "cx60-ci-base.tar.gz.part-03",
+      "sha256": "c62d240242e99a3552f9545d9be5eb7ccb91c25b97868b4c67c66af6fbeef4f2"
+    }
+  ]
+}
