@@ -114,18 +114,18 @@ int main(void){
  reset(20);charging=false;raw=100;
  for(int i=0;i<20;i++)tick();
  assert(d.cap==20&&reads==20&&!saves&&queues==20);
- charging=true;for(int i=0;i<20;i++)tick();assert(d.cap>20);
+ charging=true;for(int i=0;i<20;i++){tick();}assert(d.cap>20);
  /* A lower retained UI can legitimately hold until the measured SOC catches it. */
  reset(800);charging=online=false;amps=-100000;raw=900;
  for(int i=0;i<50;i++){raw-=2;tick();assert(d.cap==800);}
  for(int i=0;i<10;i++){raw-=2;tick();}assert(d.cap<800);
  /* Unknown charger type is not an early-return condition in this worker. */
  reset(800);raw=790;charging=online=false;amps=-100000;
- for(int i=0;i<4;i++)tick();assert(d.cap<800);
+ for(int i=0;i<4;i++){tick();}assert(d.cap<800);
  /* Transient critical reads must requeue, then recover without a replug. */
  for(int f=1;f<=5;f++){
   reset(40);raw=60;fail=f;tick();assert(d.cap==40&&!saves);
-  fail=0;for(int i=0;i<4;i++)tick();assert(d.cap>40);
+  fail=0;for(int i=0;i<4;i++){tick();}assert(d.cap>40);
  }
  reset(800);full=true;raw=1000;tick();assert(d.cap>800);
  reset(800);cm.shutdown_flag=true;now=15;
