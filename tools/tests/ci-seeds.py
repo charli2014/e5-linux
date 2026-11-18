@@ -53,6 +53,15 @@ class CommittedSeeds(unittest.TestCase):
         for path in seeds.SEEDS.iterdir():
             self.assertNotIn(path.name, ('wcnmodem.bin', 'android'))
 
+    def test_every_seed_is_tracked_by_git(self):
+        # A bare .gitignore pattern (e.g. "busybox") can silently skip a seed
+        # at commit time; the CI checkout would then lack it.
+        import subprocess
+        tracked = subprocess.run(['git', 'ls-files', 'devices/changxing60/ci-seeds'],
+                                 cwd=TOP, capture_output=True, text=True, check=True).stdout.split()
+        self.assertEqual(sorted(tracked), sorted(
+            'devices/changxing60/ci-seeds/' + p.name for p in seeds.SEEDS.iterdir()))
+
 
 class BaseLock(unittest.TestCase):
     def test_committed_lock_is_valid(self):
