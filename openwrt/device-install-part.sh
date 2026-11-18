@@ -178,7 +178,7 @@ keep_config() {
     local from=$1 O=$2 f p app screen_apps
     echo "== keeping the configuration of $from"
     screen_apps=$(mktemp -d /tmp/e5-part.screen.XXXXXX)
-    for app in phone esim; do
+    for app in phone esim power; do
         if [ -f "$O/etc/e5-infoscreen/plugins/$app/manifest.json" ]; then
             mkdir -p "$screen_apps/$app"
             cp -a "$O/etc/e5-infoscreen/plugins/$app/." "$screen_apps/$app/"
@@ -188,7 +188,7 @@ keep_config() {
         cp "$O/etc/e5/$f" "/tmp/e5-part.$f" 2>/dev/null || rm -f "/tmp/e5-part.$f"
     done
     for p in etc/config etc/shadow etc/passwd etc/group etc/dropbear etc/e5 etc/e5linux \
-             etc/uhttpd.crt etc/uhttpd.key etc/vnstat etc/e5-infoscreen etc/e5-sms; do
+             etc/uhttpd.crt etc/uhttpd.key etc/vnstat etc/e5-infoscreen etc/e5-sms etc/e5-power.json; do
         [ -e "$from/$p" ] || continue
         if [ -d "$from/$p" ] && [ -d "$O/$p" ]; then
             cp -a "$from/$p/." "$O/$p/"
@@ -201,7 +201,7 @@ keep_config() {
         rm -f "$O/etc/e5/$f"
         [ -f "/tmp/e5-part.$f" ] && mv "/tmp/e5-part.$f" "$O/etc/e5/$f"
     done
-    for app in phone esim; do
+    for app in phone esim power; do
         if [ -f "$screen_apps/$app/manifest.json" ]; then
             rm -rf "$O/etc/e5-infoscreen/plugins/$app"
             mkdir -p "$O/etc/e5-infoscreen/plugins/$app"

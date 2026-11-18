@@ -1,0 +1,122 @@
+#!/usr/bin/python3
+"""Standby policy shared by LuCI and the info screen.
+
+Writes /etc/e5-power.json; the e5-power-state daemon picks changes up by
+mtime within one tick, so timing edits apply without a restart. Live state
+is read from the daemon's /run/e5-power.json.
+"""
+import fcntl
+import json
+import os
+from pathlib import Path
+import sys
+
+DEFAULTS = {'idle_min': 0, 'deep_min': 0, 'hold_awake_min': 5, 'inhibit': False, 'deep_test': False}
+UI_KEYS = ('idle_min', 'deep_min', 'hold_awake_min', 'inhibit')
+
+
+def atomic_json(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + '.new')
+    with tmp.open('w') as stream:
+        os.chmod(tmp, 0o600)
+        json.dump(data, stream, separators=(',', ':'))
+        stream.flush()
+        os.fsync(stream.fileno())
+    tmp.replace(path)
+    fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def validate(config):
+    if not isinstance(config, dict) or set(config) - set(DEFAULTS):
+        raise ValueError('unknown power setting')
+    for key in ('idle_min', 'deep_min', 'hold_awake_min'):
+        value = config.get(key, DEFAULTS[key])
+        if type(value) is not int or not 0 <= value <= 1440:
+            raise ValueError('%s must be 0..1440 minutes' % key)
+    for key in ('inhibit', 'deep_test'):
+        if type(config.get(key, DEFAULTS[key])) is not bool:
+            raise ValueError('%s must be a boolean' % key)
+    if config.get('hold_awake_min', DEFAULTS['hold_awake_min']) < 1:
+        raise ValueError('hold_awake_min must be at least 1 minute')
+
+
+class Control:
+    def __init__(self, root=Path('/')):
+        self.root = root
+        self.config_path = root / 'etc/e5-power.json'
+        self.defaults_path = root / 'usr/share/e5-power/defaults.json'
+        self.state_path = root / 'run/e5-power.json'
+        self.runtime = root / 'run/e5-power'
+
+    def defaults(self):
+        try:
+            data = json.loads(self.defaults_path.read_text())
+            validate(data)
+            return data
+        except (OSError, ValueError):
+            return dict(DEFAULTS)
+
+    def config(self):
+        try:
+            data = json.loads(self.config_path.read_text())
+            validate(data)
+            return data
+        except FileNotFoundError:
+            return self.defaults()
+        except (OSError, ValueError):
+            return dict(DEFAULTS)
+
+    def snapshot(self):
+        state = None
+        try:
+            state = json.loads(self.state_path.read_text())
+        except (OSError, ValueError):
+            pass
+        return {'ok': True, 'config': self.config(), 'defaults': self.defaults(), 'state': state}
+
+    def apply(self, changes, persist):
+        if not persist:
+            raise ValueError('power settings are always persisted')
+        if not isinstance(changes, dict) or set(changes) - set(UI_KEYS):
+            raise ValueError('unknown power setting')
+        config = self.config()
+        config.update(changes)
+        validate(config)
+        if config['hold_awake_min'] < 1:
+            config['hold_awake_min'] = 1
+        atomic_json(self.config_path, config)
+        return self.snapshot()
+
+    def reset(self):
+        atomic_json(self.config_path, self.defaults())
+        return self.snapshot()
+
+
+def main():
+    method = sys.argv[1] if len(sys.argv) > 1 else 'get'
+    controller = Control()
+    controller.runtime.mkdir(parents=True, exist_ok=True)
+    with (controller.runtime / 'lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            if method == 'get':
+                result = controller.snapshot()
+            elif method == 'apply':
+                request = json.load(sys.stdin)
+                result = controller.apply(request.get('changes', {}), request.get('persist'))
+            elif method == 'reset':
+                result = controller.reset()
+            else:
+                raise ValueError('Unknown operation')
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            result = {'ok': False, 'error': str(error)}
+        print(json.dumps(result, separators=(',', ':')))
+
+
+if __name__ == '__main__':
+    main()

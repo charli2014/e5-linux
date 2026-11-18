@@ -1,0 +1,7 @@
+{
+  "e5-power": {
+    "description": "Standby policy: idle/deep timers, keep-awake and live state",
+    "read": { "ubus": { "e5-power": ["get"] } },
+    "write": { "ubus": { "e5-power": ["apply", "reset"] } }
+  }
+}

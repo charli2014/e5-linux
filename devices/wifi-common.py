@@ -179,11 +179,20 @@ static void iface_notify_deinit(struct sprd_priv *priv)
     # Android consumes the vendor assert event; OpenWrt needs a uevent to tell
     # netifd to reopen the radio. Emit once per reset from sleepable work, never
     # from the atomic WCN notifier or for ordinary client disconnections.
+    # Use the wiphy's own device: wiphy_dev() returns the parent (platform),
+    # whose DEVPATH never matches the ieee80211/phyN hotplug recovery rule.
+    # Migrate cached trees still carrying the parent-device uevent.
+    path = base / 'common/cfg80211.c'
+    text = path.read_text()
+    if 'kobject_uevent_env(&wiphy_dev(priv->wiphy)->kobj,' in text:
+        path.write_text(text.replace(
+            'kobject_uevent_env(&wiphy_dev(priv->wiphy)->kobj,',
+            'kobject_uevent_env(&priv->wiphy->dev.kobj,', 1))
     edit('common/cfg80211.c',
          '\t\twl_info("Try to report assert a %d time \\n", hif->report_try);',
          '\t\tif (hif->report_try == 1) {\n'
          '\t\t\tchar *env[] = { "SC2355_RECOVERY=1", NULL };\n\n'
-         '\t\t\tkobject_uevent_env(&wiphy_dev(priv->wiphy)->kobj,\n'
+         '\t\t\tkobject_uevent_env(&priv->wiphy->dev.kobj,\n'
          '\t\t\t\t\t   KOBJ_CHANGE, env);\n'
          '\t\t}\n'
          '\t\twl_info("Try to report assert a %d time \\n", hif->report_try);')

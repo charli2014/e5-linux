@@ -2,6 +2,31 @@
 
 > 安装器已独立到 [openwrt-tools](https://github.com/kanoqwq/openwrt-tools)，本仓库通过 `installer/` 子模块固定引用。已有检出请执行 `git submodule update --init --recursive`；新检出使用 `git clone --recurse-submodules`。
 
+## This fork (charli2014/e5-linux)
+
+Upstream [sprd-linux-devs/e5-linux](https://github.com/sprd-linux-devs/e5-linux) is the
+Debian/OpenWrt port for the Unisoc UMS9621/UMS9620 5G hotspot family (Rongyue E5, T551M,
+Changxing 60 and others). The Changxing 60 (ZTE 7552N / P720S20, UMS9620) board profile
+`devices/changxing60/` is upstream work.
+
+This fork's own change so far is one feature: **staged power-saving standby for
+Changxing 60** (code complete 2026-11-17, not yet deployed to hardware):
+
+- `e5-power-state` daemon + `e5-power` init service: ONLINE → IDLE (no Wi-Fi client and
+  no USB data peer for 30 min: cellular/BT off through the existing data-sim radio jobs,
+  SIM polling stopped, **hotspot kept**) → DEEP (hotspot off + system suspend).
+  DEEP ships disabled (`deep_min=0`) until a controlled suspend test passes on the board.
+- A persistent marker restores the radios if the device reboots while idle; wake holds
+  the device awake 5 min with short-episode backoff; audio, SIPA wakelock, upgrade locks
+  and USB peers gate suspend. ONLINE-state throughput is untouched by design.
+- Display: two-stage pipeline off via cage's native output-management protocol
+  (`e5-output-ctl`, no cage patch). Plus a CLOCK_BOOTTIME monotonic fix and
+  `workqueue.power_efficient=1` + PM_DEBUG in the board kernel config.
+- Dual UI: LuCI tab `admin/modem/power` and an info-screen power plugin, both on the
+  shared `e5-power` rpcd backend; `/etc/e5-power.json` is preserved across updates.
+- Other models are unaffected (defaults idle 0 / deep 0). Change ledger:
+  [docs/POWER-STANDBY-20261117.zh-CN.md](docs/POWER-STANDBY-20261117.zh-CN.md);
+  state-machine tests: `devices/test_power_state.py` (28 cases).
 
 Maintainer notes: [stock behavior and new-device adaptation checklist](docs/NEW-DEVICE-STOCK-ADAPTATION.zh-CN.md),
 [shared charge/call/Wi-Fi evidence](docs/STOCK-CHARGE-CALL-WIFI-20261016.zh-CN.md).

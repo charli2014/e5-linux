@@ -15,19 +15,21 @@ c = r'''
 #include <stddef.h>
 #include <string.h>
 struct work_struct { int unused; };
-struct device { int kobj; };
+struct device { int kobj; struct device *parent; };
+struct wiphy { struct device dev; };
 struct sprd_hif { int reset_lock, cp_asserted, report_try, block_cmd_after_close; };
-struct sprd_priv { struct {struct work_struct work;} reset_delay_work; struct sprd_hif hif; struct device *wiphy; };
+struct sprd_priv { struct {struct work_struct work;} reset_delay_work; struct sprd_hif hif; struct wiphy *wiphy; };
 #define container_of(p,t,m) ((t *)((char *)(p)-offsetof(t,m)))
 #define KOBJ_CHANGE 2
 #define wl_info(...) ((void)0)
 static int events, reports, scheduled;
+static int *uevent_kobj;
 static void mutex_lock(int *p) {}
 static void mutex_unlock(int *p) {}
 static int atomic_read(int *p) {return *p;}
-static struct device *wiphy_dev(struct device *d) {return d;}
+static struct device *wiphy_dev(struct wiphy *w) {return w->dev.parent;}
 static int kobject_uevent_env(int *p,int action,char **env) {
- assert(action==KOBJ_CHANGE && !strcmp(env[0],"SC2355_RECOVERY=1") && !env[1]); events++; return 0;
+ assert(action==KOBJ_CHANGE && !strcmp(env[0],"SC2355_RECOVERY=1") && !env[1]); uevent_kobj=p; events++; return 0;
 }
 static void sprd_iface_report_assert_evt(struct sprd_priv *p) {reports++;}
 static int msecs_to_jiffies(int n) {return n;}
@@ -35,13 +37,17 @@ static void schedule_delayed_work(void *p,int n) {assert(n==500); scheduled++;}
 '''
 c += worker + r'''
 int main(void) {
- struct device d={0}; struct sprd_priv p={.wiphy=&d};
+ struct device parent={0}; struct wiphy w={.dev={.parent=&parent}};
+ struct sprd_priv p={.wiphy=&w};
  sprd_do_reset_delay_work(&p.reset_delay_work.work); assert(events==0);
  p.hif.cp_asserted=1; p.hif.block_cmd_after_close=1;
  sprd_do_reset_delay_work(&p.reset_delay_work.work); assert(events==0);
  p.hif.report_try=0; p.hif.block_cmd_after_close=0;
  for(int i=0;i<7;i++) sprd_do_reset_delay_work(&p.reset_delay_work.work);
  assert(events==1 && reports==5 && scheduled==5);
+ /* The uevent must come from the wiphy device itself, not its parent:
+    only ieee80211/phyN DEVPATH reaches the hotplug recovery rule. */
+ assert(uevent_kobj==&w.dev.kobj && uevent_kobj!=&parent.kobj);
  p.hif.report_try=0;
  sprd_do_reset_delay_work(&p.reset_delay_work.work); assert(events==2);
 }

@@ -1,0 +1,16 @@
+{
+	"id": "power",
+	"api_version": 2,
+	"version": "1.0",
+	"name": {
+		"zh": "省电待机",
+		"en": "Power standby"
+	},
+	"description": {
+		"zh": "空闲分级待机：浅待机保持热点，深睡挂起系统",
+		"en": "Staged standby: idle keeps the hotspot, deep sleep suspends"
+	},
+	"entry": "index.html",
+	"order": 26,
+	"notifications": false
+}

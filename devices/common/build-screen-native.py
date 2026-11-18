@@ -12,9 +12,11 @@ SOURCE = TOP/'devices/common/infoscreen/native'
 OUT = TOP/'out/native-screen'
 TARGETS = {
     't551m-screen-power': ['screen-power.c'],
+    'e5-output-ctl': ['output-ctl.c'],
     't551m-sim-status': ['sim-status.c', 'native-common.c'],
     'e5-voice-native': ['voice.c', 'voice-hardware.c', 'screen-http.c', 'native-common.c'],
 }
+STATIC = {'t551m-screen-power', 'e5-output-ctl'}
 
 
 def route_manifest():
@@ -42,7 +44,7 @@ def build(names=None, config_path=None):
     results={}
     for name in names:
         sources=TARGETS[name]
-        deps=[SOURCE/s for s in sources]+([] if name=='t551m-screen-power' else [SOURCE/'native.h'])
+        deps=[SOURCE/s for s in sources]+([] if name in STATIC else [SOURCE/'native.h'])
         inputs={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in deps}
         inputs['builder']=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
         inputs['toolchain']=config
@@ -56,11 +58,11 @@ def build(names=None, config_path=None):
         compiler='/build/openwrt/staging_dir/'+config['toolchain']+'/bin/aarch64-openwrt-linux-musl-gcc'
         sysroot='/build/openwrt/staging_dir/target-aarch64_generic_musl'
         args=[compiler,'-std=gnu11','-pthread','-Os','-g0','-Wall','-Wextra','-Werror','-fstack-protector-strong','-ffunction-sections','-fdata-sections','-Wl,--gc-sections','-Wl,-z,relro,-z,now','-s']
-        if name=='t551m-screen-power':args+=['-static']
+        if name in STATIC:args+=['-static']
         else:args += ['-I'+sysroot+'/usr/include/glib-2.0','-I'+sysroot+'/usr/lib/glib-2.0/include',
                       '-I'+sysroot+'/usr/include','-L'+sysroot+'/usr/lib','-Wl,-rpath-link,'+sysroot+'/usr/lib']
         args += ['/source/'+s for s in sources]+['-o','/out/'+name+'.tmp']
-        if name!='t551m-screen-power':args+=['-lgio-2.0','-lgobject-2.0','-lglib-2.0','-ljson-c','-ldl','-lm']
+        if name not in STATIC:args+=['-lgio-2.0','-lgobject-2.0','-lglib-2.0','-ljson-c','-ldl','-lm']
         cmd=['docker','run','--rm','-e','STAGING_DIR=/build/openwrt/staging_dir/target-aarch64_generic_musl','-v',config['volume']+':/build:ro','-v',linux(SOURCE)+':/source:ro','-v',linux(OUT)+':/out',config['image'],*args]
         if os.name=='nt':cmd=['wsl','-d','Ubuntu-22.04','--exec',*cmd]
         subprocess.run(cmd,check=True)

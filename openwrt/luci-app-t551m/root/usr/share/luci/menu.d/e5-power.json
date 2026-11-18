@@ -1,0 +1,8 @@
+{
+  "admin/modem/power": {
+    "title": "省电待机",
+    "order": 26,
+    "action": { "type": "view", "path": "mu300/power" },
+    "depends": { "acl": ["e5-power"] }
+  }
+}

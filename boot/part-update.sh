@@ -127,7 +127,7 @@ part_update_pending() {
     done
     # /etc/e5-infoscreen also contains user apps and wallpaper. Keep those,
     # while retaining the new image's integrated app code across restoration.
-    for app in phone esim; do
+    for app in phone esim power; do
         if [ -d "$new/etc/e5-infoscreen/plugins/$app" ]; then
             mkdir -p "$ram/new-screen-apps/$app" || return 1
             cp -a "$new/etc/e5-infoscreen/plugins/$app/." "$ram/new-screen-apps/$app/" || return 1
@@ -137,7 +137,7 @@ part_update_pending() {
     if [ -f "$ram/nv.tar" ]; then
         nv_restore_offline "$new" "$ram/nv.tar" || { part_fail 'NV restore/readback failed'; return 1; }
     fi
-    for app in phone esim; do
+    for app in phone esim power; do
         if [ -d "$ram/new-screen-apps/$app" ]; then
             rm -rf "$new/etc/e5-infoscreen/plugins/$app" || return 1
             mkdir -p "$new/etc/e5-infoscreen/plugins/$app" || return 1

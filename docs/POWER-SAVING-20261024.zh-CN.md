@@ -94,6 +94,10 @@ Call 接口属性。旧观察器反复获取总快照仍无法补齐这些属性
 regulator_ignore_unused。后续应结合各机型原厂驱动和设备树验证资源归属、
 显示关闭/恢复和触控/电源键唤醒，再进行硬件层改动。
 
+2026-11-17 后续：畅行60 已经由 cage 自带的 output-management 协议实现
+两段式真关管线（e5-output-ctl），并加入 IDLE/DEEP 分级待机，
+见 POWER-STANDBY-20261117.zh-CN.md。
+
 ## 重跑
 
 浏览器测试和现有屏幕回归使用相同的 --fixtures FILE --webroot DIR 参数。

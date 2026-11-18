@@ -74,7 +74,7 @@ tar -cf /.e5-update/firmware.tar $firmware
 settings=
 for name in etc/config etc/shadow etc/passwd etc/group etc/dropbear etc/e5 etc/e5linux \
     etc/uhttpd.crt etc/uhttpd.key etc/vnstat etc/e5-infoscreen etc/e5-sms etc/unisoc-modem \
-    etc/e5-sounds etc/e5-cpu-voltage.json etc/bluetooth; do
+    etc/e5-sounds etc/e5-cpu-voltage.json etc/e5-power.json etc/bluetooth; do
     [ ! -e "$name" ] || settings="$settings $name"
 done
 # Preserve policy's NV archive already includes this entire history. Original
@@ -88,6 +88,7 @@ fi
 # BEGIN image-owned-settings-filter
 exclude=$(mktemp "${TMPDIR:-/tmp}/e5-settings-exclude.XXXXXX")
 printf '%s\n' etc/e5-infoscreen/plugins/phone etc/e5-infoscreen/plugins/esim \
+    etc/e5-infoscreen/plugins/power \
     etc/e5/image-version etc/e5/image-form etc/e5/build-time etc/e5/release.json \
     etc/e5/build.json etc/e5/feature-port.json etc/e5/device-profile > "$exclude"
 # OpenWrt BusyBox tar supports -X, but need not support --exclude.

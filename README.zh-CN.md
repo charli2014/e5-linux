@@ -5,6 +5,32 @@ Windows 图形安装器：完整解压安装包后运行根目录 `OpenWrt-Insta
 
 > English: [`README.md`](README.md)
 
+## 本 fork 的修改（charli2014/e5-linux）
+
+上游 [sprd-linux-devs/e5-linux](https://github.com/sprd-linux-devs/e5-linux) 提供
+Unisoc UMS9621/UMS9620 系列 5G 热点（荣悦 E5、T551M、畅行60 等）的 Debian/OpenWrt
+移植，安装器在 [openwrt-tools](https://github.com/kanoqwq/openwrt-tools) 子模块。
+畅行60（中兴 7552N / P720S20，UMS9620）的板级 profile `devices/changxing60/`
+来自上游。
+
+本 fork 目前在上游之上的独立修改只有一项：**畅行60 分级省电待机**
+（2026-11-17 代码完成，尚未部署真机）：
+
+- `e5-power-state` 守护进程 + `e5-power` 服务：ONLINE → IDLE（无 Wi-Fi 客户端且无
+  USB 数据对端连续 30 分钟：经现有 data-sim 射频 job 关蜂窝/蓝牙、停 SIM 轮询，
+  **保留热点**）→ DEEP（关热点 + 系统挂起）。DEEP 出厂禁用（`deep_min=0`），
+  待真机受控挂起试验通过后在界面启用。
+- IDLE 中重启由持久标记恢复射频；唤醒后保持清醒 5 分钟，短待机退避；
+  挂起前检查音频、SIPA wakelock、升级锁、USB 对端。设计上 ONLINE 态网速零影响。
+- 显示：经 cage 原生 output-management 协议两段式真关管线（`e5-output-ctl`，
+  免 cage 补丁）；另有 CLOCK_BOOTTIME 单调时钟修复、板级内核配置
+  `workqueue.power_efficient=1` + PM_DEBUG。
+- 双界面：LuCI 页签 `admin/modem/power` 与信息屏 power 插件，共用 `e5-power`
+  rpcd 后端；`/etc/e5-power.json` 随更新保留。
+- 其它机型不受影响（默认 idle 0 / deep 0）。改动台账：
+  [docs/POWER-STANDBY-20261117.zh-CN.md](docs/POWER-STANDBY-20261117.zh-CN.md)；
+  状态机测试：`devices/test_power_state.py`（28 项）。
+
 T551M 使用独立的[设备适配说明](devices/t551m/README.md)，包含充电、GPIO 背光、
 32 位厂商运行环境和 NV 隔离。请按该说明构建、试启动 T551M。
 

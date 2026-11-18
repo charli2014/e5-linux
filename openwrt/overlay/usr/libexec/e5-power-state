@@ -1,0 +1,474 @@
+#!/usr/bin/python3
+"""Two-stage standby for the router: ONLINE -> IDLE -> DEEP.
+
+IDLE keeps the hotspot (a phone associating wakes the network) but turns the
+cellular radios, Bluetooth and SIM polling off through their existing owners.
+DEEP additionally stops the hotspot and suspends the system; only the power
+key, USB or the charger wake it. Policy lives in /etc/e5-power.json:
+
+  idle_min       minutes without clients/USB peer before IDLE (0 disables)
+  deep_min       further IDLE minutes before DEEP (0 keeps the hotspot on)
+  hold_awake_min minutes to stay awake after any wake before re-arming
+  inhibit        manual keep-awake
+  deep_test      stage DEEP through /sys/power/pm_test instead of real sleep
+
+No AT commands are issued here: radio changes go through unisoc-modem/data-sim
+(the SFUN policy owner), services through their init scripts, the hotspot
+through /sbin/wifi. The pre-sleep radio policy is saved so a reboot while
+asleep cannot leave the radios off.
+"""
+import fcntl
+import json
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+
+DEFAULTS = {'idle_min': 0, 'deep_min': 0, 'hold_awake_min': 5, 'inhibit': False, 'deep_test': False}
+TICK = 5
+RETRY = 300
+
+
+def boottime():
+    return time.clock_gettime(time.CLOCK_BOOTTIME)
+
+
+def atomic_json(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + '.new')
+    with tmp.open('w') as stream:
+        json.dump(data, stream, separators=(',', ':'))
+        stream.flush()
+        os.fsync(stream.fileno())
+    tmp.replace(path)
+
+
+def load_config(path):
+    cfg = dict(DEFAULTS)
+    try:
+        raw = json.loads(path.read_text())
+    except FileNotFoundError:
+        return cfg, None
+    except (OSError, ValueError) as error:
+        return cfg, 'config unreadable: %s' % error
+    if not isinstance(raw, dict) or set(raw) - set(DEFAULTS):
+        return cfg, 'unknown power setting'
+    for key in ('idle_min', 'deep_min', 'hold_awake_min'):
+        value = raw.get(key, DEFAULTS[key])
+        if type(value) is not int or not 0 <= value <= 1440:
+            return cfg, '%s must be 0..1440 minutes' % key
+        cfg[key] = value
+    for key in ('inhibit', 'deep_test'):
+        value = raw.get(key, DEFAULTS[key])
+        if type(value) is not bool:
+            return cfg, '%s must be a boolean' % key
+        cfg[key] = value
+    if cfg['hold_awake_min'] < 1:
+        cfg['hold_awake_min'] = 1
+    return cfg, None
+
+
+class Ops:
+    """System operations, each through the component's existing owner."""
+
+    def __init__(self, root=Path('/')):
+        self.root = root
+
+    def run(self, args, timeout=60, stdin=None):
+        return subprocess.run(args, capture_output=True, text=True, timeout=timeout,
+                              input=stdin, check=False)
+
+    def radio_policy(self):
+        try:
+            result = self.run([str(self.root / 'usr/libexec/unisoc-modem/data-sim'), 'radio-get'], timeout=10)
+            data = json.loads(result.stdout)
+            if data.get('ok') and isinstance(data.get('enabled'), list) and len(data['enabled']) == 2:
+                return [bool(v) for v in data['enabled']]
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+        return None
+
+    def radio_set(self, slot, enabled):
+        tool = str(self.root / 'usr/libexec/unisoc-modem/data-sim')
+        try:
+            info = json.loads(self.run([tool, 'get'], timeout=10).stdout)
+            current = info.get('data_sim')
+            if current not in (0, 1):
+                return 'data SIM unavailable'
+            request = {'slot': str(slot), 'current': str(current), 'enabled': enabled, 'confirm': True}
+            job = json.loads(self.run([tool, 'radio'], timeout=15, stdin=json.dumps(request)).stdout)
+            if not job.get('ok'):
+                return job.get('error', 'radio request rejected')
+            if job.get('state') == 'done':
+                return None
+            deadline = time.monotonic() + 90
+            while time.monotonic() < deadline:
+                status = json.loads(self.run([tool, 'status', job['id']], timeout=10).stdout)
+                if status.get('state') == 'done':
+                    return None
+                if status.get('state') == 'error':
+                    return status.get('error', 'radio job failed')
+                time.sleep(1)
+            return 'radio job timed out'
+        except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+            return str(error)
+
+    def service(self, name, on):
+        try:
+            result = self.run([str(self.root / 'etc/init.d') / name, 'start' if on else 'stop'], timeout=90)
+            return None if result.returncode == 0 else (result.stderr or 'service failed')[-180:]
+        except (OSError, subprocess.SubprocessError) as error:
+            return str(error)
+
+    def wifi_set(self, on):
+        try:
+            result = self.run([str(self.root / 'sbin/wifi'), 'up' if on else 'down'], timeout=90)
+            return None if result.returncode == 0 else (result.stderr or 'wifi failed')[-180:]
+        except (OSError, subprocess.SubprocessError) as error:
+            return str(error)
+
+    def clients(self):
+        """Associated stations across all hostapd interfaces; None = unknown."""
+        try:
+            listing = self.run(['ubus', 'list'], timeout=5).stdout.split()
+            total = 0
+            for obj in listing:
+                if not obj.startswith('hostapd.'):
+                    continue
+                data = json.loads(self.run(['ubus', '-t', '3', 'call', obj, 'get_clients'], timeout=5).stdout)
+                total += len(data.get('clients', {}))
+            return total
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return None
+
+    def usb_peer(self):
+        """A data host, not a charger: gadget configured or usb0 carrying."""
+        try:
+            for state in (self.root / 'sys/class/udc').glob('*/state'):
+                if state.read_text().strip() == 'configured':
+                    return True
+            carrier = self.root / 'sys/class/net/usb0/carrier'
+            if carrier.exists() and carrier.read_text().strip() == '1':
+                return True
+            return False
+        except OSError:
+            return True  # unknown: stay reachable
+
+    def brightness(self):
+        try:
+            values = [int(p.read_text().strip()) for p in (self.root / 'sys/class/backlight').glob('*/brightness')]
+            return max(values, default=0)
+        except (OSError, ValueError):
+            return 1  # unknown: treat as lit
+
+    def audio_running(self):
+        try:
+            result = self.run(['pactl', 'list', 'sinks'], timeout=10)
+            return result.returncode != 0 or 'State: RUNNING' in result.stdout
+        except (OSError, subprocess.SubprocessError):
+            return True
+
+    def upgrade_locked(self):
+        for name in ('e5-upgrade/lock', 'e5-part-update.lock'):
+            path = self.root / 'run' / name
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open('a') as lock:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            except OSError:
+                return True
+        return False
+
+    def wakelocks(self):
+        try:
+            return (self.root / 'sys/power/wake_lock').read_text().split()
+        except OSError:
+            return ['unknown']
+
+    def suspend(self, test):
+        try:
+            if test:
+                (self.root / 'sys/power/pm_test').write_text('core\n')
+            try:
+                (self.root / 'sys/power/state').write_text('mem\n')
+            finally:
+                if test:
+                    (self.root / 'sys/power/pm_test').write_text('none\n')
+            return None
+        except OSError as error:
+            return str(error)
+
+    def wan_resume(self):
+        try:
+            subprocess.Popen([str(self.root / 'usr/libexec/e5-network-recovery')],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError:
+            pass
+
+    def log(self, message):
+        print('e5-power: ' + message, flush=True)
+
+
+class Machine:
+    def __init__(self, ops, config_path, state_path, marker_path, clock=boottime):
+        self.ops = ops
+        self.config_path = config_path
+        self.state_path = state_path
+        self.marker_path = marker_path
+        self.clock = clock
+        self.config, self.config_error = load_config(config_path)
+        self.config_mtime = self.mtime()
+        self.state = 'ONLINE'
+        self.since = clock()
+        self.idle_deadline = None
+        self.deep_deadline = None
+        self.hold_until = 0
+        self.episode_start = None
+        self.multiplier = 1
+        self.radio_saved = None
+        self.last_error = None
+        self.deep_blocked = None
+
+    def mtime(self):
+        try:
+            return self.config_path.stat().st_mtime_ns
+        except OSError:
+            return None
+
+    def save_marker(self, policy):
+        if not self.marker_path.exists():
+            atomic_json(self.marker_path, {'enabled': policy})
+
+    def drop_marker(self):
+        self.marker_path.unlink(missing_ok=True)
+
+    def restore_radio(self):
+        saved = self.radio_saved
+        if saved is None and self.marker_path.exists():
+            try:
+                saved = json.loads(self.marker_path.read_text()).get('enabled')
+            except (OSError, ValueError):
+                saved = None
+        errors = []
+        if isinstance(saved, list) and len(saved) == 2:
+            for slot, on in enumerate(saved):
+                if on:
+                    error = self.ops.radio_set(slot, True)
+                    if error:
+                        errors.append(error)
+        self.drop_marker()
+        self.radio_saved = None
+        return errors
+
+    def boot(self):
+        if self.marker_path.exists():
+            errors = self.restore_radio()
+            if errors:
+                self.last_error = '; '.join(errors)
+            self.ops.log('restored radio policy saved before sleep')
+        self.hold_until = self.clock() + self.config['hold_awake_min'] * 60
+
+    def activity(self):
+        clients = self.ops.clients()
+        if clients is None or clients > 0:
+            return True
+        if self.ops.usb_peer():
+            return True
+        return self.ops.brightness() > 0
+
+    def enter_idle(self, now):
+        policy = self.ops.radio_policy()
+        if policy is None:
+            self.last_error = 'radio policy unreadable'
+            self.idle_deadline = now + RETRY
+            return
+        self.save_marker(policy)
+        self.radio_saved = policy
+        for slot, on in enumerate(policy):
+            if not on:
+                continue
+            error = self.ops.radio_set(slot, False)
+            if error:
+                self.last_error = 'radio off failed: %s' % error
+                self.restore_radio()
+                self.idle_deadline = now + RETRY
+                return
+        self.ops.service('t551m-sim-status', False)
+        self.ops.service('e5-bt', False)
+        self.state = 'IDLE'
+        self.since = now
+        self.episode_start = now
+        self.deep_deadline = None
+        self.deep_blocked = None
+        self.ops.log('IDLE: radios/BT/SIM polling off, hotspot kept')
+
+    def enter_deep(self, now):
+        if self.ops.audio_running():
+            self.deep_blocked = 'audio playing'
+        elif any('sipa' in name.lower() for name in self.ops.wakelocks()):
+            self.deep_blocked = 'SIPA wakelock still held'
+        else:
+            self.deep_blocked = None
+        if self.deep_blocked:
+            self.deep_deadline = now + RETRY
+            return
+        error = self.ops.wifi_set(False)
+        if error:
+            self.last_error = 'hotspot off failed: %s' % error
+            self.deep_deadline = now + RETRY
+            return
+        self.state = 'DEEP'
+        self.since = now
+        self.publish(now)
+        self.ops.log('DEEP: hotspot off, suspending%s' % (' (pm_test)' if self.config['deep_test'] else ''))
+        error = self.ops.suspend(self.config['deep_test'])
+        # Resume lands here; a failed suspend lands here too.
+        self.ops.wifi_set(True)
+        errors = self.restore_radio()
+        self.ops.service('t551m-sim-status', True)
+        self.ops.service('e5-bt', True)
+        self.ops.wan_resume()
+        self.state = 'ONLINE'
+        self.since = now
+        self.hold_until = self.clock() + self.config['hold_awake_min'] * 60
+        self.idle_deadline = None
+        self.deep_deadline = None
+        self.multiplier = 1
+        if error:
+            self.last_error = 'suspend failed: %s' % error
+            self.ops.log(self.last_error)
+        if errors:
+            self.last_error = '; '.join(errors)
+        self.ops.log('awake from DEEP, network restoring')
+
+    def wake(self, reason, now):
+        errors = self.restore_radio()
+        self.ops.service('t551m-sim-status', True)
+        self.ops.service('e5-bt', True)
+        self.ops.wan_resume()
+        if self.episode_start is not None and now - self.episode_start < 120:
+            self.multiplier = min(self.multiplier * 2, 4)
+        else:
+            self.multiplier = 1
+        self.state = 'ONLINE'
+        self.since = now
+        self.hold_until = now + self.config['hold_awake_min'] * 60
+        self.idle_deadline = None
+        self.deep_deadline = None
+        self.episode_start = None
+        self.deep_blocked = None
+        if errors:
+            self.last_error = '; '.join(errors)
+        self.ops.log('awake (%s), hold %d min' % (reason, self.config['hold_awake_min']))
+
+    def reload(self, now):
+        mtime = self.mtime()
+        if mtime == self.config_mtime:
+            return
+        self.config_mtime = mtime
+        config, error = load_config(self.config_path)
+        if error:
+            self.last_error = error
+            return
+        old = self.config
+        self.config = config
+        self.config_error = None
+        if self.state != 'ONLINE' and (config['idle_min'] == 0 or config['inhibit']):
+            self.wake('config', now)
+            return
+        if config['idle_min'] != old['idle_min']:
+            self.idle_deadline = None
+        if config['deep_min'] != old['deep_min']:
+            self.deep_deadline = None
+
+    def publish(self, now):
+        def remaining(deadline):
+            return max(0, int(deadline - now)) if deadline else None
+        atomic_json(self.state_path, {
+            'state': self.state, 'since': self.since,
+            'idle_in': remaining(self.idle_deadline), 'deep_in': remaining(self.deep_deadline),
+            'hold_in': remaining(self.hold_until), 'multiplier': self.multiplier,
+            'config': self.config, 'last_error': self.last_error, 'deep_blocked': self.deep_blocked,
+        })
+
+    def tick(self, now):
+        self.reload(now)
+        if self.ops.upgrade_locked():
+            if self.state != 'ONLINE':
+                self.wake('upgrade', now)
+            self.publish(now)
+            return
+        if self.config['inhibit']:
+            if self.state != 'ONLINE':
+                self.wake('inhibit', now)
+            self.publish(now)
+            return
+        active = self.activity()
+        if self.state == 'IDLE':
+            # data-sim persists the off policy, so the expected IDLE readback
+            # is all-off; anything on means the user re-enabled a SIM elsewhere
+            policy = self.ops.radio_policy()
+            if policy is not None and any(policy):
+                self.wake('radio policy changed', now)
+                self.publish(now)
+                return
+        if active:
+            if self.state != 'ONLINE':
+                self.wake('activity', now)
+            elif now >= self.hold_until:
+                self.idle_deadline = None
+            self.publish(now)
+            return
+        if self.state == 'ONLINE':
+            if self.config['idle_min'] == 0 or now < self.hold_until:
+                self.idle_deadline = None
+            else:
+                if self.idle_deadline is None:
+                    self.idle_deadline = now + self.config['idle_min'] * 60 * self.multiplier
+                if now >= self.idle_deadline:
+                    self.enter_idle(now)
+        elif self.state == 'IDLE':
+            if self.config['deep_min'] == 0:
+                self.deep_deadline = None
+            else:
+                if self.deep_deadline is None:
+                    self.deep_deadline = now + self.config['deep_min'] * 60
+                if now >= self.deep_deadline:
+                    self.enter_deep(now)
+        self.publish(now)
+
+
+def main():
+    ops = Ops()
+    machine = Machine(ops, Path('/etc/e5-power.json'), Path('/run/e5-power.json'),
+                      Path('/etc/e5/power-radio-restore.json'))
+    stopped = []
+
+    def stop(signum, frame):
+        stopped.append(signum)
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    machine.boot()
+    ops.log('started: idle=%d min deep=%d min' % (machine.config['idle_min'], machine.config['deep_min']))
+    while not stopped:
+        try:
+            machine.tick(machine.clock())
+        except Exception as error:  # a bad tick must not strand the state machine
+            ops.log('tick error: %r' % error)
+        time.sleep(TICK)
+    if machine.state != 'ONLINE':
+        try:
+            machine.wake('service stop', machine.clock())
+            machine.publish(machine.clock())
+        except Exception as error:
+            ops.log('shutdown restore error: %r' % error)
+
+
+if __name__ == '__main__':
+    main()

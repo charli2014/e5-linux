@@ -16,12 +16,17 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 static const char *root;
 static volatile sig_atomic_t stopped;
 static char lights[32][PATH_MAX], touches[32][PATH_MAX];
 static unsigned nl, nt;
+/* Two-stage blanking: after a grace period dark, disable the compositor's
+ * output pipeline (e5-output-ctl); enable it again before any backlight. */
+static int pipeline, grace_s = 10;
+static char ctlpath[PATH_MAX];
 static void stop(int sig) {
     (void)sig;
     stopped = 1;
@@ -117,9 +122,10 @@ static int discover(void) {
     }
     return 0;
 }
-static int allowed(void) {
+static int uci_get(const char *option, char *value, size_t size) {
     /* libuci's command also merges uncommitted /tmp/.uci deltas. Only called
-     * on startup or an actual configuration event, never on a periodic tick. */
+     * on startup or an actual configuration event, never on a periodic tick.
+     * Returns 0 present, 1 absent, -1 error. */
     int p[2];
     if (pipe2(p, O_CLOEXEC) < 0)
         return -1;
@@ -138,28 +144,138 @@ static int allowed(void) {
             dup2(null, STDERR_FILENO);
             close(null);
         }
-        execlp("uci", "uci", "-q", "get", "e5-infoscreen.main.touch", NULL);
+        char key[128];
+        snprintf(key, sizeof(key), "e5-infoscreen.main.%s", option);
+        execlp("uci", "uci", "-q", "get", key, NULL);
         _exit(127);
     }
     close(p[1]);
     struct pollfd fd = {p[0], POLLIN, 0};
-    char value[64] = {0};
+    char buf[64] = {0};
     int ready;
     do {
         ready = poll(&fd, 1, 3000);
     } while (ready < 0 && errno == EINTR && !stopped);
-    ssize_t n = ready > 0 ? read(p[0], value, sizeof(value) - 1) : -1;
+    ssize_t n = ready > 0 ? read(p[0], buf, sizeof(buf) - 1) : -1;
     close(p[0]);
     if (ready <= 0)
         kill(child, SIGKILL);
     int status;
     while (waitpid(child, &status, 0) < 0 && errno == EINTR) {
     }
-    if (ready <= 0 || n < 0) {
+    if (ready <= 0 || n < 0 || !WIFEXITED(status)) {
         errno = ETIMEDOUT;
         return -1;
     }
-    return strcmp(value, "0\n") != 0 && strcmp(value, "0") != 0;
+    if (WEXITSTATUS(status) == 1) {
+        value[0] = 0;
+        return 1;
+    }
+    if (WEXITSTATUS(status) != 0)
+        return -1;
+    buf[strcspn(buf, "\r\n")] = 0;
+    snprintf(value, size, "%s", buf);
+    return 0;
+}
+static int allowed(void) {
+    char value[64];
+    if (uci_get("touch", value, sizeof(value)) < 0)
+        return -1;
+    return strcmp(value, "0") != 0;
+}
+static void load_pipeline(void) {
+    char v[64];
+    pipeline = 0;
+    if (uci_get("pipeline_off", v, sizeof(v)) != 0 || strcmp(v, "1"))
+        return;
+    grace_s = 10;
+    if (uci_get("pipeline_grace", v, sizeof(v)) == 0 && v[0]) {
+        long g = strtol(v, NULL, 10);
+        if (g >= 1 && g <= 3600)
+            grace_s = (int)g;
+    }
+    /* No client binary (other boards, older images): stay backlight-only. */
+    if (access(ctlpath, X_OK) == 0)
+        pipeline = 1;
+}
+static long long now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_BOOTTIME, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+static int ctl_exec(const char *cmd, char *out, size_t outsz) {
+    int p[2];
+    if (out && pipe2(p, O_CLOEXEC) < 0)
+        return -1;
+    pid_t child = fork();
+    if (child < 0) {
+        if (out) {
+            close(p[0]);
+            close(p[1]);
+        }
+        return -1;
+    }
+    if (!child) {
+        int null = open("/dev/null", O_WRONLY);
+        if (out) {
+            dup2(p[1], STDOUT_FILENO);
+            close(p[0]);
+            close(p[1]);
+        } else if (null >= 0) {
+            dup2(null, STDOUT_FILENO);
+        }
+        if (null >= 0) {
+            dup2(null, STDERR_FILENO);
+            close(null);
+        }
+        execl(ctlpath, "e5-output-ctl", cmd, NULL);
+        _exit(127);
+    }
+    if (out)
+        close(p[1]);
+    int ready = 1;
+    size_t got = 0;
+    if (out) {
+        struct pollfd fd = {p[0], POLLIN, 0};
+        do {
+            ready = poll(&fd, 1, 5000);
+        } while (ready < 0 && errno == EINTR && !stopped);
+        if (ready > 0) {
+            ssize_t n = read(p[0], out, outsz - 1);
+            if (n > 0)
+                got = (size_t)n;
+        }
+        close(p[0]);
+        if (ready <= 0)
+            kill(child, SIGKILL);
+    }
+    int status;
+    while (waitpid(child, &status, 0) < 0 && errno == EINTR) {
+    }
+    if (out) {
+        out[got] = 0;
+        if (ready <= 0)
+            return -1;
+    }
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+static int ctl_state(void) {
+    char v[16];
+    if (ctl_exec("status", v, sizeof(v)) != 0)
+        return -1;
+    if (!strcmp(v, "on"))
+        return 1;
+    if (!strcmp(v, "off"))
+        return 0;
+    return -1;
+}
+static bool all_dark(void) {
+    for (unsigned i = 0; i < nl; i++) {
+        long value;
+        if (read_number(lights[i], 10, &value) < 0 || value > 0)
+            return false;
+    }
+    return nl > 0;
 }
 static int inhibit(bool off) {
     for (unsigned i = 0; i < nt; i++) {
@@ -184,6 +300,14 @@ static int reconcile(int level, int touch) {
     int rc = -1;
     if (flock(lock, LOCK_EX) < 0)
         goto out;
+    /* Wake ordering: the pipeline must scan out again before the backlight
+     * comes up, or the panel lights a black frame. */
+    bool woke = false;
+    if (level > 0 && pipeline && ctl_state() == 0) {
+        if (ctl_exec("on", NULL, 0) != 0)
+            fprintf(stderr, "screen-power: display pipeline enable failed\n");
+        woke = true;
+    }
     if (level >= 0) {
         if (inhibit(!(level > 0 && touch)) < 0)
             goto out;
@@ -204,6 +328,8 @@ static int reconcile(int level, int touch) {
             goto out;
         on |= value > 0;
     }
+    if (on && pipeline && !woke && ctl_state() == 0 && ctl_exec("on", NULL, 0) != 0)
+        fprintf(stderr, "screen-power: display pipeline enable failed\n");
     rc = inhibit(!(on && touch));
 out:
     {
@@ -257,8 +383,18 @@ static int watch(int touch) {
             fds[count++] = (struct pollfd){fd, POLLPRI | POLLERR, 0};
         }
     }
+    long long blank_since = 0;
+    bool off_sent = false;
+    /* Already dark at startup: arm the grace now, no event will announce it. */
+    if (pipeline && all_dark())
+        blank_since = now_ms();
     while (!stopped) {
-        int rc = poll(fds, count, -1);
+        int timeout = -1;
+        if (pipeline && blank_since && !off_sent) {
+            long long rem = (long long)grace_s * 1000 - (now_ms() - blank_since);
+            timeout = rem > 0 ? (int)rem : 0;
+        }
+        int rc = poll(fds, count, timeout);
         if (rc < 0) {
             if (errno == EINTR)
                 continue;
@@ -315,11 +451,34 @@ static int watch(int touch) {
             touch = allowed();
             if (touch < 0)
                 return 1;
+            load_pipeline();
             changed = true;
         }
         if (changed && reconcile(-1, touch) < 0) {
             perror("screen-power reconcile");
             return 1;
+        }
+        if (pipeline) {
+            if (!all_dark()) {
+                blank_since = 0;
+                off_sent = false;
+            } else {
+                long long now = now_ms();
+                if (!blank_since)
+                    blank_since = now;
+                if (!off_sent && now - blank_since >= (long long)grace_s * 1000) {
+                    int state = ctl_state();
+                    if (state == 1) {
+                        if (ctl_exec("off", NULL, 0) == 0)
+                            off_sent = true;
+                        else
+                            blank_since = now; /* back off a full grace before retrying */
+                    } else {
+                        /* Already off, or no compositor to ask: don't hammer. */
+                        off_sent = true;
+                    }
+                }
+            }
         }
     }
     for (unsigned i = 0; i < count; i++)
@@ -351,8 +510,12 @@ int main(int argc, char **argv) {
         perror("screen-power devices");
         return 1;
     }
+    path(ctlpath, "/usr/libexec/e5-output-ctl");
     int touch = allowed();
-    if (touch < 0 || reconcile(level, touch) < 0) {
+    if (touch < 0)
+        return 1;
+    load_pipeline();
+    if (reconcile(level, touch) < 0) {
         perror("screen-power reconcile");
         return 1;
     }

@@ -98,4 +98,111 @@ class ScreenPower(unittest.TestCase):
             p.terminate();out,err=p.communicate(timeout=3);self.assertEqual(p.returncode,0,err)
 
 
+class ScreenPipeline(unittest.TestCase):
+    """Two-stage blanking against a fake output-control client and per-option uci."""
+    @classmethod
+    def setUpClass(cls):
+        cls.build=tempfile.TemporaryDirectory();cls.binary=Path(cls.build.name)/'screen-power'
+        subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-DSCREEN_POWER_TEST',str(SOURCE),'-o',str(cls.binary)],check=True)
+
+    @classmethod
+    def tearDownClass(cls):cls.build.cleanup()
+
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
+        self.root=Path(self.tmp.name)
+        self.light=self.root/'sys/class/backlight/panel/brightness'
+        self.touch=self.root/'sys/class/input/input7/inhibited'
+        for p in (self.light,self.touch):p.parent.mkdir(parents=True,exist_ok=True);p.write_text('0\n')
+        (self.touch.parent/'properties').write_text('2\n')
+        for d in ('run','etc/config','tmp/.uci','bin','usr/libexec'):(self.root/d).mkdir(parents=True,exist_ok=True)
+        self.cfg=self.root/'etc/config'
+        (self.cfg/'touch').write_text('1\n')
+        (self.cfg/'pipeline_off').write_text('1\n')
+        (self.cfg/'pipeline_grace').write_text('1\n')
+        (self.cfg/'ctl_state').write_text('on\n')
+        uci=self.root/'bin/uci'
+        uci.write_text('#!/bin/sh\ncase "$3" in\n e5-infoscreen.main.*) cat "$E5_SCREEN_ROOT/etc/config/${3##*.}";;\n *) exit 1;;\nesac\n')
+        uci.chmod(0o755)
+        ctl=self.root/'usr/libexec/e5-output-ctl'
+        ctl.write_text('#!/bin/sh\necho "$1" >> "$E5_SCREEN_ROOT/ctl.log"\ncase "$1" in\n status) cat "$E5_SCREEN_ROOT/etc/config/ctl_state";;\n on) printf "on\\n" > "$E5_SCREEN_ROOT/etc/config/ctl_state";;\n off) printf "off\\n" > "$E5_SCREEN_ROOT/etc/config/ctl_state";;\nesac\n')
+        ctl.chmod(0o755)
+        self.log=self.root/'ctl.log'
+        self.env=dict(os.environ,E5_SCREEN_ROOT=str(self.root),PATH=str(self.root/'bin')+':'+os.environ['PATH'])
+
+    def call(self,*args,ok=True):
+        r=subprocess.run([str(self.binary),*args],env=self.env,capture_output=True,text=True,timeout=6)
+        self.assertEqual(r.returncode==0,ok,r.stderr)
+        return r
+
+    def calls(self):
+        return self.log.read_text().splitlines() if self.log.exists() else []
+
+    def wait_call(self,name,deadline=3.0):
+        end=time.monotonic()+deadline
+        while time.monotonic()<end:
+            if name in self.calls():return
+            time.sleep(.02)
+        self.fail('output-ctl %s was not invoked: %s'%(name,self.calls()))
+
+    def test_wake_enables_pipeline_before_backlight(self):
+        (self.cfg/'ctl_state').write_text('off\n')
+        self.call('set','180')
+        self.assertEqual(self.calls()[0],'on')
+        self.assertEqual(self.light.read_text(),'180\n')
+        self.assertEqual((self.cfg/'ctl_state').read_text(),'on\n')
+
+    def test_external_bright_wake_also_enables(self):
+        (self.cfg/'ctl_state').write_text('off\n')
+        self.light.write_text('120\n')
+        self.call('sync')
+        self.assertIn('on',self.calls())
+
+    def test_blank_grace_then_off_and_wake_on(self):
+        p=subprocess.Popen([str(self.binary),'watch'],env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        try:
+            self.wait_call('off')
+            self.assertEqual((self.cfg/'ctl_state').read_text(),'off\n')
+            self.light.write_text('90\n')
+            end=time.monotonic()+3
+            while time.monotonic()<end and self.calls().count('on')<1:time.sleep(.02)
+            self.assertIn('on',self.calls())
+        finally:
+            p.terminate();out,err=p.communicate(timeout=3);self.assertEqual(p.returncode,0,err)
+
+    def test_grace_not_shortened_by_early_poll(self):
+        (self.cfg/'pipeline_grace').write_text('2\n')
+        p=subprocess.Popen([str(self.binary),'watch'],env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        try:
+            time.sleep(.8)
+            self.assertNotIn('off',self.calls())
+            self.wait_call('off',deadline=3.0)
+        finally:
+            p.terminate();out,err=p.communicate(timeout=3);self.assertEqual(p.returncode,0,err)
+
+    def test_gate_off_keeps_backlight_only(self):
+        (self.cfg/'pipeline_off').write_text('0\n')
+        (self.cfg/'ctl_state').write_text('off\n')
+        self.call('set','180')
+        self.assertEqual(self.light.read_text(),'180\n')
+        self.assertEqual(self.calls(),[])
+
+    def test_missing_client_binary_degrades(self):
+        (self.root/'usr/libexec/e5-output-ctl').unlink()
+        (self.cfg/'ctl_state').write_text('off\n')
+        self.call('set','180')
+        self.assertEqual(self.light.read_text(),'180\n')
+        self.assertEqual(self.calls(),[])
+
+    def test_unknown_compositor_state_gives_up_quietly(self):
+        (self.cfg/'ctl_state').write_text('garbage\n')
+        p=subprocess.Popen([str(self.binary),'watch'],env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        try:
+            self.wait_call('status')
+            time.sleep(1.3)
+            self.assertNotIn('off',self.calls())
+        finally:
+            p.terminate();out,err=p.communicate(timeout=3);self.assertEqual(p.returncode,0,err)
+
+
 if __name__=='__main__':unittest.main()

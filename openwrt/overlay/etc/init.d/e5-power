@@ -1,0 +1,25 @@
+#!/bin/sh /etc/rc.common
+# Two-stage standby policy: ONLINE -> IDLE (hotspot kept, radios/BT/SIM off)
+# -> DEEP (hotspot off + suspend).  Policy: /etc/e5-power.json, status:
+# /run/e5-power.json.  After the SIM poller (96) and screen power (94) so a
+# boot-time restore marker is handled once those owners exist.
+START=97
+STOP=05
+USE_PROCD=1
+
+start_service() {
+	procd_open_instance
+	procd_set_param command /usr/bin/python3 /usr/libexec/e5-power-state
+	procd_set_param respawn 3600 5 0
+	# SIGTERM restore may run two radio jobs; if procd still has to kill us,
+	# /etc/e5/power-radio-restore.json restores the policy at next boot
+	procd_set_param term_timeout 120
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
+stop_service() {
+	# the daemon restores radios/services itself on SIGTERM before exiting
+	:
+}

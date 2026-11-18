@@ -2,6 +2,7 @@
 """Shared handheld UI with P720S20 identity; no M8/41S calibration."""
 from pathlib import Path
 import json
+import re
 import runpy
 import xml.etree.ElementTree as ET
 
@@ -26,6 +27,15 @@ def stage_screen(root):
     # 480x854 -> 384x683 logical layout; browser scaling also covers apps and
     # touch hit areas. Keep the separate user font-size preference unchanged.
     session.write_text(scale_session(session.read_text()))
+    # This board's panel resumes cleanly from an atomic disable (P0): let
+    # screen-power drop the whole display pipeline after the blank grace.
+    # Idempotent; a user who turned it off keeps their choice across updates.
+    config = root / 'etc/config/e5-infoscreen'
+    text = config.read_text()
+    if 'pipeline_off' not in text:
+        if len(re.findall(r'^config\s', text, re.M)) != 1:
+            raise ValueError('Unexpected infoscreen config layout')
+        config.write_text(text.rstrip('\n') + "\n\toption pipeline_off '1'\n\toption pipeline_grace '10'\n")
 
 
 def early_module_order(kernel, release):
@@ -45,11 +55,25 @@ def stage_touch(root):
     path.write_text('spi-sprd\naxs15205\n')
 
 
+def stage_power(root):
+    root = Path(root)
+    # deep_min ships 0 (deep sleep disabled) until a controlled suspend test
+    # passes on this board; IDLE alone already removes the modem/BT load.
+    defaults = {'idle_min': 30, 'deep_min': 0, 'hold_awake_min': 5, 'inhibit': False}
+    share = root / 'usr/share/e5-power/defaults.json'
+    share.parent.mkdir(parents=True, exist_ok=True)
+    share.write_text(json.dumps(defaults, separators=(',', ':')) + '\n')
+    config = root / 'etc/e5-power.json'
+    if not config.exists():
+        config.write_text(json.dumps(defaults, separators=(',', ':')) + '\n')
+
+
 def stage(root):
     runpy.run_path(str(Path(__file__).resolve().parents[1] / 'm8/stage.py'))['stage'](
         root, profile='changxing60')
     stage_screen(root)
     stage_touch(root)
+    stage_power(root)
     root = Path(root)
     (root / 'etc/e5/storage-kind').write_text('ufs\n')
     (root / 'etc/e5/receiver-wiring').write_text('aol\n')

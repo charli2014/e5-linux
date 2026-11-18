@@ -65,7 +65,7 @@ keep_config() {
     # Preserve user apps and data, but keep the image's integrated screen apps
     # from the new root. Otherwise old /etc/e5-infoscreen files overwrite them.
     screen_apps=$(mktemp -d /tmp/e5-img.screen.XXXXXX)
-    for app in phone esim; do
+    for app in phone esim power; do
         if [ -f "$N/etc/e5-infoscreen/plugins/$app/manifest.json" ]; then
             mkdir -p "$screen_apps/$app"
             cp -a "$N/etc/e5-infoscreen/plugins/$app/." "$screen_apps/$app/"
@@ -76,7 +76,7 @@ keep_config() {
     done
     for p in etc/config etc/shadow etc/passwd etc/group etc/dropbear etc/e5 etc/e5linux \
              etc/uhttpd.crt etc/uhttpd.key etc/vnstat etc/e5-infoscreen etc/e5-sms \
-             etc/unisoc-modem etc/e5-sounds etc/e5-cpu-voltage.json etc/bluetooth; do
+             etc/unisoc-modem etc/e5-sounds etc/e5-cpu-voltage.json etc/e5-power.json etc/bluetooth; do
         [ -e "$from/$p" ] || continue
         if [ -d "$from/$p" ] && [ -d "$N/$p" ]; then
             cp -a "$from/$p/." "$N/$p/"
@@ -89,7 +89,7 @@ keep_config() {
         rm -f "$N/etc/e5/$f"
         [ -f "/tmp/e5-img.$f" ] && mv "/tmp/e5-img.$f" "$N/etc/e5/$f"
     done
-    for app in phone esim; do
+    for app in phone esim power; do
         if [ -f "$screen_apps/$app/manifest.json" ]; then
             rm -rf "$N/etc/e5-infoscreen/plugins/$app"
             mkdir -p "$N/etc/e5-infoscreen/plugins/$app"

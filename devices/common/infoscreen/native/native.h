@@ -4,6 +4,7 @@
 #include <glib-unix.h>
 #include <json-c/json.h>
 #include <stdbool.h>
+#include <time.h>
 
 typedef struct json_object Json;
 static inline void json_free(gpointer p) {
@@ -49,7 +50,11 @@ static inline double realtime(void) {
     return g_get_real_time() / 1000000.0;
 }
 static inline double monotime(void) {
-    return g_get_monotonic_time() / 1000000.0;
+    /* CLOCK_BOOTTIME, not MONOTONIC: deadlines must expire across a system
+     * suspend instead of silently stretching by the whole sleep duration. */
+    struct timespec ts;
+    clock_gettime(CLOCK_BOOTTIME, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1000000000.0;
 }
 char *native_path(const char *path);
 char *read_bytes(const char *path, gsize maximum, gsize *length);

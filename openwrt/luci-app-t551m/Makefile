@@ -52,7 +52,7 @@ define Package/luci-app-t551m/install
 	chmod 0755 $(1)/etc/init.d/unisoc-cpu-idle $(1)/usr/libexec/rpcd/unisoc-cpu-idle $(1)/usr/libexec/unisoc-modem/cpu-idle
 	chmod 0755 $(1)/etc/init.d/unisoc-network-performance $(1)/usr/libexec/rpcd/unisoc-network-performance $(1)/usr/libexec/unisoc-modem/network-performance
 	chmod 0755 $(1)/etc/init.d/unisoc-modem-ui $(1)/etc/init.d/unisoc-traffic $(1)/etc/hotplug.d/net/90-unisoc-usb-host $(1)/etc/hotplug.d/iface/90-unisoc-usb-host $(1)/usr/libexec/rpcd/mu300dash $(1)/usr/libexec/unisoc-modem/*
-	chmod 0755 $(1)/etc/init.d/e5-cpu $(1)/usr/libexec/rpcd/e5-cpu
+	chmod 0755 $(1)/etc/init.d/e5-cpu $(1)/usr/libexec/rpcd/e5-cpu $(1)/usr/libexec/rpcd/e5-power
 	chmod 0755 $(1)/etc/init.d/unisoc-sms-forward
 	chmod 0600 $(1)/etc/config/unisoc_apn
 	chmod 0755 $(1)/etc/uci-defaults/97-unisoc-upgrade-policy $(1)/etc/uci-defaults/99-unisoc-wifi-widths

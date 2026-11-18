@@ -399,6 +399,7 @@ printf "E5\n" > $R/etc/hostname
 
 cp -a /in/overlay/. $R/
 chmod 0755 $R/etc/uci-defaults/95-disable-ap-uapsd
+chmod 0755 $R/etc/init.d/e5-power $R/usr/libexec/e5-power-state
 if [ "$CONTAINERS" = 1 ]; then
     python3 $R/usr/libexec/e5-container-setup --root $R
 fi
@@ -462,12 +463,14 @@ rm -f $R/etc/rc.d/*pulseaudio
 # (the cage package'"'"'s own kiosk service: cog on http://localhost/, which is LuCI,
 # shown at every boot before the info screen'"'"'s session takes the panel)
 rm -f $R/etc/rc.d/*cage
-for s in e5-hw e5-vendor e5-modemd e5-sipc-wwan e5-telnetd e5-boot-ok e5-sms-notify e5-charge unisoc-battery e5-apn-auto e5-network-recovery e5-mm-state e5-luci e5-audio e5-voice-audio e5-hfp e5-bt bluetoothd dbus modemmanager e5-usb-watch ttyd $screen; do
+for s in e5-hw e5-vendor e5-modemd e5-sipc-wwan e5-telnetd e5-boot-ok e5-sms-notify e5-charge unisoc-battery e5-apn-auto e5-network-recovery e5-mm-state e5-luci e5-audio e5-voice-audio e5-hfp e5-bt e5-power bluetoothd dbus modemmanager e5-usb-watch ttyd $screen; do
     n=$(sed -n "s/^START=//p" $R/etc/init.d/$s)
     ln -sf ../init.d/$s $R/etc/rc.d/S$n$s
 done
 ln -sf ../init.d/e5-modemd $R/etc/rc.d/K09e5-modemd
 ln -sf ../init.d/unisoc-battery $R/etc/rc.d/K08unisoc-battery
+# standby policy restores radios/services on SIGTERM: stop it before the modem
+ln -sf ../init.d/e5-power $R/etc/rc.d/K05e5-power
 # no kernel of its own
 rm -rf $R/lib/modules/* $R/boot
 arel=$(cat /in/sa/audio/release)
