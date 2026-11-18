@@ -31,12 +31,6 @@ env:
   E5_WRT_VER: '25.12.5'
 
 jobs:
-  gui:
-    uses: ./.github/workflows/gui.yml
-
-  gui_macos:
-    uses: ./.github/workflows/gui-macos.yml
-
   kernel:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 150
@@ -88,7 +82,7 @@ jobs:
           if-no-files-found: error
 
   build:
-    needs: [gui, gui_macos, kernel]
+    needs: [kernel]
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 360
     outputs:
@@ -137,6 +131,10 @@ jobs:
           tar -xzf inputs/wifi-sae.tar.gz -C work/wifi-sae
           tar -xzf inputs/iwinfo-ap-scan.tar.gz -C work/iwinfo-ap-scan
           tar -xzf inputs/lpac.tar.gz -C "$WS/artifacts/lpac"
+      - name: Prepare locked native installers
+        run: |
+          python3 tools/build-release.py prepare-installers \
+            --workspace "$CX60_WS" --label installer-inputs
       - uses: actions/download-artifact@v4
         with:
           name: kernel-changxing60
@@ -203,22 +201,6 @@ jobs:
           sh openwrt/build-block-mount.sh
           E5_TEST_IMAGE="e5-openwrt-base:$E5_WRT_VER" E5_TEST_BLOCK_APK="$PWD/out/openwrt/block-mount-guarded.apk" \
             python3 openwrt/tests/block-probe.py
-      - uses: actions/download-artifact@v4
-        with:
-          name: openwrt-installer-windows
-          path: installer/artifacts/windows
-      - uses: actions/download-artifact@v4
-        with:
-          name: openwrt-installer-macos-arm64
-          path: ${{ runner.temp }}/installer-macos
-      - name: Restore native macOS artifact
-        run: |
-          mkdir -p installer/artifacts/macos-arm64
-          tar -xzf "$RUNNER_TEMP/installer-macos/openwrt-installer-macos-arm64.tar.gz" -C installer/artifacts/macos-arm64
-          {
-            echo "OPENWRT_GUI_ARTIFACT=$GITHUB_WORKSPACE/installer/artifacts/windows"
-            echo "OPENWRT_GUI_MACOS_ARTIFACT=$GITHUB_WORKSPACE/installer/artifacts/macos-arm64"
-          } >> "$GITHUB_ENV"
       - name: Write the CI build layout
         run: |
           python3 - <<'EOF'
@@ -245,8 +227,7 @@ jobs:
       - name: Assemble the Changxing 60 installer package
         run: |
           set -o pipefail
-          sudo --preserve-env=OPENWRT_GUI_ARTIFACT,OPENWRT_GUI_MACOS_ARTIFACT,OPENWRT_GUI_ANDROID_ARTIFACT \
-            python3 tools/build-release.py package \
+          sudo python3 tools/build-release.py package \
             --workspace "$CX60_WS" --config "$RUNNER_TEMP/ci-layout.json" \
             --profiles changxing60 --label changxing60-ci 2>&1 | tee "$RUNNER_TEMP/package.log"
       - name: Collect release files and notes

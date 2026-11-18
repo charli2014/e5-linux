@@ -7,10 +7,16 @@
 
 | job | 运行器 | 内容 |
 |---|---|---|
-| `gui` / `gui_macos` | 复用现有可重用工作流 | Windows / macOS 安装器构件 |
 | `kernel` | ubuntu-24.04-arm | 公开内核源码 `Enceka/linux-lts-e5`（默认提交 `020b970e`，即本机登记的 UMS9620 供体基线）+ 引导包中的基线 config，跑 `devices/changxing60/build-kernel.py`（含 prepare-kernel 补丁与全部板级测试），产出内核交付 tar |
-| `build` | ubuntu-24.04-arm | 还原引导输入 → 导入 OpenWrt 25.12.5 armsr 基础镜像 → 省电/更新保留测试 → 编译 ModemManager/BlueZ/原生屏组件（带缓存）与 guarded block-mount → 取 GUI 构件 → `sudo tools/build-release.py package --profiles changxing60`（唯一发布入口，Android 安装器由 input_check 自动构建）→ 校验 zip、写 SHA256SUMS 与发布说明 |
+| `build` | ubuntu-24.04-arm | 还原引导输入 → `prepare-installers` 下载版本锁定的三平台安装器（sha256 + 源码指纹双校验）→ 导入 OpenWrt 25.12.5 armsr 基础镜像 → 省电/更新保留测试 → 编译 ModemManager/BlueZ/原生屏组件（带缓存）与 guarded block-mount → `sudo tools/build-release.py package --profiles changxing60`（唯一发布入口，Android 安装器由 input_check 自动构建）→ 校验 zip、写 SHA256SUMS 与发布说明 |
 | `publish` | ubuntu-24.04 | 沿用 E5 的草稿 Release 流程：校验哈希 → 建草稿 → 上传 → 发布；已发布的 tag 拒绝覆盖 |
+
+安装器不在 CI 从源码编译，而是走 `tools/installer-inputs.lock.json` 锁定的
+上游已发布构件（`prepare-installers`，LOCAL-BUILD 的标准流程）。原因：
+installer 子模块的测试套件在 GitHub 托管运行器上有平台缺陷（Windows
+cp1252 编码/反斜杠路径语义，macOS 无 `os.listxattr`、/var 别名解析），
+子模块仓库不在本 fork 名下、无法推送修复；锁定下载同样经过哈希与源码
+指纹校验，不削弱验证。E5 的 `release.yml` 仍走源码编译，不受影响。
 
 内核源码是公开仓库，**不需要公开任何厂商源码**。私有输入只有引导包
 （见下），与 E5 的 `E5_CI_INPUTS_URL` 机制相同。
@@ -77,8 +83,9 @@ Release 资产：`changxing60-*.zip`（安装包，含 Windows/macOS/Android 安
    被拒（报 source mismatch），需在构建机重新 `create` 并更新两个变量。
    基线 config、base、模板同理。
 2. **安装器锁。** `installer` 子模块提交必须与
-   `tools/installer-inputs.lock.json` 一致（与 E5 发布同一把锁），
-   GUI 构件由同一工作流构建，天然匹配。
+   `tools/installer-inputs.lock.json` 一致（与 E5 发布同一把锁）；
+   `prepare-installers` 按锁下载并校验三平台构件，子模块更新而锁未更新时
+   会直接拒绝。
 3. **首次运行需要迭代。** 本工作流离线验证了 YAML 与脚本逻辑，
    但 arm 运行器上的完整编译链路以第一次真实运行为准；失败时看
    `cx60-diagnostics-*` 构件（build-logs/build-state/package.log）。
