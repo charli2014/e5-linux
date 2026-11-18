@@ -9,8 +9,10 @@ Debian/OpenWrt port for the Unisoc UMS9621/UMS9620 5G hotspot family (Rongyue E5
 Changxing 60 and others). The Changxing 60 (ZTE 7552N / P720S20, UMS9620) board profile
 `devices/changxing60/` is upstream work.
 
-This fork's own change so far is one feature: **staged power-saving standby for
-Changxing 60** (code complete 2026-11-17, not yet deployed to hardware):
+This fork's own changes so far are two features.
+
+**1. Staged power-saving standby for Changxing 60** (code complete 2026-11-17,
+not yet deployed to hardware):
 
 - `e5-power-state` daemon + `e5-power` init service: ONLINE → IDLE (no Wi-Fi client and
   no USB data peer for 30 min: cellular/BT off through the existing data-sim radio jobs,
@@ -27,6 +29,15 @@ Changxing 60** (code complete 2026-11-17, not yet deployed to hardware):
 - Other models are unaffected (defaults idle 0 / deep 0). Change ledger:
   [docs/POWER-STANDBY-20261117.zh-CN.md](docs/POWER-STANDBY-20261117.zh-CN.md);
   state-machine tests: `devices/test_power_state.py` (28 cases).
+
+**2. Changxing 60 CI build and release pipeline** (code complete 2026-11-17,
+first run pending one-time provisioning):
+`.github/workflows/changxing60-release.yml` compiles the board kernel from the
+public `Enceka/linux-lts-e5` donor commit, assembles the installer package
+through `tools/build-release.py` and publishes it as a (pre)release. Private
+build inputs travel in a hash-pinned bootstrap archive created by
+`tools/ci-inputs.py create --profile changxing60`; the E5 release workflow is
+untouched. Setup and caveats: [docs/CI-CHANGXING60.zh-CN.md](docs/CI-CHANGXING60.zh-CN.md).
 
 Maintainer notes: [stock behavior and new-device adaptation checklist](docs/NEW-DEVICE-STOCK-ADAPTATION.zh-CN.md),
 [shared charge/call/Wi-Fi evidence](docs/STOCK-CHARGE-CALL-WIFI-20261016.zh-CN.md).

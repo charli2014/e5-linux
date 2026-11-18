@@ -8,6 +8,7 @@ from pathlib import Path
 import struct
 import tarfile
 import tempfile
+import types
 import unittest
 from unittest.mock import patch
 import zlib
@@ -86,6 +87,116 @@ class Bootstrap(unittest.TestCase):
     def test_extra_package_rejected(self):
         with self.assertRaisesRegex(ValueError, 'exactly'):
             inputs.package_paths('P:cog\n\nP:libcogcore\n\nP:libwpewebkit\n\nP:vendor-firmware\n')
+
+
+class Changxing60Bootstrap(unittest.TestCase):
+    def fixtures(self, top):
+        boot = bytearray(64 << 20)
+        boot[:8] = b'ANDROID!'
+        struct.pack_into('<I', boot, 40, 4)
+        boot[4096:4120] = b'stock kernel to remove!!'
+        boot[8192:8448] = b'AVB0' + b'v' * 252
+        boot[-64:-60] = b'AVBf'
+        struct.pack_into('>QQQ', boot, len(boot) - 52, 8192, 8192, 256)
+        (top / 'boot_a.img').write_bytes(bytes(boot))
+        misc = bytearray(b'x' * 4096)
+        bc = bytearray(32)
+        bc[4:8] = b'BCAB'
+        struct.pack_into('<I', bc, 28, zlib.crc32(bc[:28]))
+        misc[0x800:0x820] = bc
+        (top / 'misc-head.bin').write_bytes(bytes(misc))
+        busybox = bytearray(64)
+        busybox[:4] = b'\x7fELF'
+        struct.pack_into('<H', busybox, 18, 183)
+        (top / 'busybox').write_bytes(bytes(busybox))
+        (top / 'base.config').write_text(
+            'CONFIG_SPRD_UMS9620_CLK=y\nCONFIG_PINCTRL_SPRD_QOGIRN6PRO=y\n')
+        base = top / 'base'
+        (base / 'sbin').mkdir(parents=True)
+        (base / 'sbin/sysupgrade.openwrt').write_bytes(b'backup implementation')
+        (base / 'bin').mkdir()
+        (base / 'bin/busybox').write_bytes(b'busybox')
+        try:
+            (base / 'sbin/sh').symlink_to('../bin/busybox')
+            has_symlink = True
+        except OSError:
+            has_symlink = False  # Windows without symlink privilege; CI covers it
+        defaults = top / 'defaults.tar'
+        with tarfile.open(defaults, 'w') as archive:
+            entry = tarfile.TarInfo('etc/config/system'); entry.size = 3
+            archive.addfile(entry, io.BytesIO(b'cfg'))
+        apks = {}
+        for name in ('wifi', 'iwinfo', 'lpac'):
+            directory = top / name
+            directory.mkdir()
+            (directory / 'package.apk').write_bytes(b'apk')
+            apks[name] = directory
+        return types.SimpleNamespace(
+            profile='changxing60', workspace=top / 'ws',
+            boot=top / 'boot_a.img', misc=top / 'misc-head.bin', busybox=top / 'busybox',
+            base_config=top / 'base.config', base_dir=base, defaults=defaults,
+            wifi_apks=apks['wifi'], iwinfo_apks=apks['iwinfo'], lpac_apks=apks['lpac'],
+            output=top / 'cx60.tar.gz', transplant=None, has_symlink=has_symlink)
+
+    def create(self, args):
+        with patch.object(inputs, 'runpy') as fake:
+            fake.run_path.return_value = {'inspect': lambda directory: {}}
+            inputs.create(args)
+
+    def test_roundtrip_restore(self):
+        with tempfile.TemporaryDirectory() as temp:
+            top = Path(temp)
+            args = self.fixtures(top)
+            self.create(args)
+            digest = Path(str(args.output) + '.sha256').read_text().split()[0]
+            data, links, modes = inputs.inspect(args.output)
+            self.assertEqual(links, {})
+            self.assertNotIn(b'stock kernel', data[inputs.CX60_BOOT])
+            destination = top / 'restore'
+            inputs.restore(types.SimpleNamespace(archive=args.output, sha256=digest,
+                                                 destination=destination))
+            self.assertTrue((destination / inputs.CX60_BOOT).is_file())
+            self.assertTrue((destination / 'inputs/base-e5.tar.gz').is_file())
+            self.assertEqual(modes[inputs.BUSYBOX_PATH], 0o755)
+            with tarfile.open(destination / 'inputs/base-e5.tar.gz') as archive:
+                self.assertIn('sbin/sysupgrade.openwrt', archive.getnames())
+                if args.has_symlink:
+                    self.assertTrue(archive.getmember('sbin/sh').issym())
+
+    def test_wrong_baseline_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            top = Path(temp)
+            args = self.fixtures(top)
+            args.base_config.write_text('CONFIG_SPRD_UMS9621_CLK=y\n')
+            with self.assertRaisesRegex(ValueError, 'UMS9620'):
+                self.create(args)
+
+    def test_device_content_in_base_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            top = Path(temp)
+            args = self.fixtures(top)
+            firmware = args.base_dir / 'lib/firmware'
+            firmware.mkdir(parents=True)
+            (firmware / 'wcnmodem.bin').write_bytes(b'vendor firmware')
+            with self.assertRaisesRegex(ValueError, 'device-specific'):
+                self.create(args)
+
+    def test_inner_tar_unsafe_path_rejected(self):
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode='w:gz') as archive:
+            entry = tarfile.TarInfo('../escape'); entry.size = 1
+            archive.addfile(entry, io.BytesIO(b'x'))
+        with self.assertRaisesRegex(ValueError, 'unsafe path'):
+            inputs.check_inner_tar(buffer.getvalue(), 'fixture.tar.gz')
+
+    def test_inner_tar_missing_sysupgrade_rejected(self):
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode='w:gz') as archive:
+            entry = tarfile.TarInfo('bin/busybox'); entry.size = 1
+            archive.addfile(entry, io.BytesIO(b'x'))
+        with self.assertRaisesRegex(ValueError, 'lacks'):
+            inputs.check_inner_tar(buffer.getvalue(), 'base-e5.tar.gz',
+                                   required=('sbin/sysupgrade.openwrt',))
 
 
 class RootAudit(unittest.TestCase):

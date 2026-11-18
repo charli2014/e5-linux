@@ -1,0 +1,346 @@
+name: Build and publish Changxing 60 OpenWrt
+run-name: Changxing60 ${{ inputs.kernel_ref || '020b970e' }} · ${{ github.ref_name }}
+
+on:
+  push:
+    tags: ['changxing60-v*']
+  workflow_dispatch:
+    inputs:
+      kernel_ref:
+        description: linux-lts-e5 commit (registered UMS9620 donor baseline)
+        default: '020b970e351eee3887e6caaf2d653926e7086e44'
+        required: true
+      publish:
+        description: Publish a GitHub Release after validation
+        type: boolean
+        default: true
+      prerelease:
+        description: Mark the release as a prerelease
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cx60-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TZ: CST-8
+  E5_WRT_VER: '25.12.5'
+
+jobs:
+  gui:
+    uses: ./.github/workflows/gui.yml
+
+  gui_macos:
+    uses: ./.github/workflows/gui-macos.yml
+
+  kernel:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: Enceka/linux-lts-e5
+          ref: ${{ inputs.kernel_ref || '020b970e351eee3887e6caaf2d653926e7086e44' }}
+          path: linux-lts-e5
+          persist-credentials: false
+      - name: Check bootstrap configuration
+        env:
+          INPUTS_URL: ${{ vars.E5_CX60_CI_INPUTS_URL }}
+          INPUTS_SHA256: ${{ vars.E5_CX60_CI_INPUTS_SHA256 }}
+        run: |
+          [[ "$INPUTS_URL" == https://* ]] || { echo '::error::Set E5_CX60_CI_INPUTS_URL (docs/CI-CHANGXING60.zh-CN.md).'; exit 1; }
+          [[ "$INPUTS_SHA256" =~ ^[a-fA-F0-9]{64}$ ]] || { echo '::error::Set E5_CX60_CI_INPUTS_SHA256.'; exit 1; }
+      - name: Install native compiler tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld llvm make bc bison flex libssl-dev libelf-dev \
+            dwarves gcc-aarch64-linux-gnu cpio lz4 gcc libc6-dev python3 curl
+      - name: Restore and verify bootstrap inputs
+        env:
+          INPUTS_URL: ${{ vars.E5_CX60_CI_INPUTS_URL }}
+          INPUTS_SHA256: ${{ vars.E5_CX60_CI_INPUTS_SHA256 }}
+        run: |
+          curl --fail --location --retry 5 --proto '=https' --proto-redir '=https' \
+            --output "$RUNNER_TEMP/cx60-inputs.tar.gz" "$INPUTS_URL"
+          python3 tools/ci-inputs.py restore "$RUNNER_TEMP/cx60-inputs.tar.gz" --sha256 "$INPUTS_SHA256"
+      - name: Compile the Changxing 60 kernel and module cohort
+        run: |
+          set -euo pipefail
+          python3 devices/changxing60/build-kernel.py \
+            --kernel "$GITHUB_WORKSPACE/linux-lts-e5" \
+            --build "$RUNNER_TEMP/objects" \
+            --base-config "$GITHUB_WORKSPACE/inputs/ums9620-base.config" \
+            --out "$RUNNER_TEMP/kernel-output" --jobs 4
+          git rev-parse HEAD > "$RUNNER_TEMP/kernel-output/repository-commit"
+          git -C linux-lts-e5 rev-parse HEAD > "$RUNNER_TEMP/kernel-output/kernel-source-commit"
+          tar -czf "$RUNNER_TEMP/kernel-changxing60.tar.gz" -C "$RUNNER_TEMP/kernel-output" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kernel-changxing60
+          path: ${{ runner.temp }}/kernel-changxing60.tar.gz
+          if-no-files-found: error
+
+  build:
+    needs: [gui, gui_macos, kernel]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 360
+    outputs:
+      tag: ${{ steps.collect.outputs.tag }}
+      title: ${{ steps.collect.outputs.title }}
+      source: ${{ steps.source.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check bootstrap configuration
+        env:
+          INPUTS_URL: ${{ vars.E5_CX60_CI_INPUTS_URL }}
+          INPUTS_SHA256: ${{ vars.E5_CX60_CI_INPUTS_SHA256 }}
+        run: |
+          [[ "$INPUTS_URL" == https://* ]] || { echo '::error::Set E5_CX60_CI_INPUTS_URL (docs/CI-CHANGXING60.zh-CN.md).'; exit 1; }
+          [[ "$INPUTS_SHA256" =~ ^[a-fA-F0-9]{64}$ ]] || { echo '::error::Set E5_CX60_CI_INPUTS_SHA256.'; exit 1; }
+      - name: Record e5-linux commit
+        id: source
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lz4 e2fsprogs binutils python3 qemu-user-static binfmt-support \
+            gcc gcc-aarch64-linux-gnu libc6-dev pkg-config libglib2.0-dev libjson-c5 python3-gi dbus-daemon curl
+          # The checksum-pinned OpenWrt SDK is x86_64; the runner is ARM64.
+          sudo update-binfmts --enable qemu-x86_64
+      - name: Restore and verify bootstrap inputs
+        env:
+          INPUTS_URL: ${{ vars.E5_CX60_CI_INPUTS_URL }}
+          INPUTS_SHA256: ${{ vars.E5_CX60_CI_INPUTS_SHA256 }}
+        run: |
+          curl --fail --location --retry 5 --proto '=https' --proto-redir '=https' \
+            --output "$RUNNER_TEMP/cx60-inputs.tar.gz" "$INPUTS_URL"
+          python3 tools/ci-inputs.py restore "$RUNNER_TEMP/cx60-inputs.tar.gz" --sha256 "$INPUTS_SHA256"
+      - name: Place registered inputs for the release entry point
+        run: |
+          set -euo pipefail
+          WS="$RUNNER_TEMP/openwrt-build"
+          echo "CX60_WS=$WS" >> "$GITHUB_ENV"
+          mkdir -p "$WS/base/e5" "$WS/artifacts/lpac" work/e5-port work/wifi-sae work/iwinfo-ap-scan
+          tar -xzf inputs/base-e5.tar.gz -C "$WS/base/e5"
+          cp inputs/clean-openwrt-base.tar work/e5-port/clean-openwrt-base.tar
+          tar -xzf inputs/wifi-sae.tar.gz -C work/wifi-sae
+          tar -xzf inputs/iwinfo-ap-scan.tar.gz -C work/iwinfo-ap-scan
+          tar -xzf inputs/lpac.tar.gz -C "$WS/artifacts/lpac"
+      - uses: actions/download-artifact@v4
+        with:
+          name: kernel-changxing60
+          path: ${{ runner.temp }}/kernel-artifact
+      - name: Unpack the verified kernel delivery
+        run: |
+          mkdir -p "$RUNNER_TEMP/kernel"
+          tar -xzf "$RUNNER_TEMP/kernel-artifact/kernel-changxing60.tar.gz" -C "$RUNNER_TEMP/kernel"
+      - name: Import the OpenWrt base image
+        run: |
+          set -euo pipefail
+          mkdir -p work/openwrt
+          base="https://downloads.openwrt.org/releases/$E5_WRT_VER/targets/armsr/armv8"
+          file="openwrt-$E5_WRT_VER-armsr-armv8-rootfs.tar.gz"
+          curl -fsSL --retry 5 "$base/$file" -o "work/openwrt/$file"
+          curl -fsSL --retry 5 "$base/sha256sums" -o work/openwrt/sha256sums
+          checksum=$(awk -v file="$file" '$2 == "*" file || $2 == file { print $1 }' work/openwrt/sha256sums)
+          [ -n "$checksum" ] || { echo '::error::No checksum for OpenWrt rootfs'; exit 1; }
+          printf '%s  %s\n' "$checksum" "work/openwrt/$file" | sha256sum --check
+          docker import --platform linux/arm64 "work/openwrt/$file" "e5-openwrt-base:$E5_WRT_VER"
+          docker tag "e5-openwrt-base:$E5_WRT_VER" "mu300-openwrt-base:$E5_WRT_VER"
+      - name: Check power standby and update preservation
+        run: |
+          set -euo pipefail
+          bash -n openwrt/build-rootfs.sh openwrt/device-install-image.sh openwrt/device-install-part.sh \
+            openwrt/device-stage-part-update.sh boot/part-update.sh
+          python3 devices/test_power_state.py
+          python3 devices/test_staging.py
+          python3 openwrt/tests/image-keep-config.py
+          python3 openwrt/tests/update-device-files.py
+          python3 tools/tests/ci-release.py
+      - name: Restore patched OpenWrt packages
+        id: packages
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            out/openwrt/*.apk
+            out/openwrt/e5-modemmanager-build.json
+            out/native-screen/
+          key: patched-apk-${{ runner.os }}-${{ runner.arch }}-${{ env.E5_WRT_VER }}-${{ hashFiles('devices/common/build-screen-native.py', 'devices/common/infoscreen/native/*.c', 'devices/common/infoscreen/native/*.h', 'devices/common/infoscreen/native/*.py', 'devices/t551m/test_screen_native.py', 'devices/t551m/test_screen_runtime.py', 'devices/t551m/test_screen_sanitizer.py', 'tools/build-layout.json', 'tools/openwrt-package-state.py', 'openwrt/tests/voice-identity.py', 'openwrt/tests/sim-power.py', 'openwrt/build-modemmanager.sh', 'openwrt/build-bluez.sh', 'openwrt/patches/**', 'rootfs/deb-patches/modemmanager-*.patch', 'rootfs/deb-patches/bluez-*.patch') }}
+      - name: Compile patched ModemManager and BlueZ
+        if: steps.packages.outputs.cache-hit != 'true'
+        run: |
+          bash openwrt/build-modemmanager.sh
+          bash openwrt/build-bluez.sh
+          python3 devices/common/build-screen-native.py
+          python3 devices/t551m/test_screen_native.py
+          python3 devices/t551m/test_output_ctl.py
+          python3 devices/t551m/test_screen_runtime.py -v
+          python3 devices/t551m/test_screen_sanitizer.py
+          # This volume belongs to this ephemeral runner. Free it before image assembly.
+          docker volume rm e5-openwrt-src
+      - name: Save patched packages before image assembly
+        if: steps.packages.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            out/openwrt/*.apk
+            out/openwrt/e5-modemmanager-build.json
+            out/native-screen/
+          key: ${{ steps.packages.outputs.cache-primary-key }}
+      - name: Build and test guarded block-mount
+        run: |
+          sh openwrt/build-block-mount.sh
+          E5_TEST_IMAGE="e5-openwrt-base:$E5_WRT_VER" E5_TEST_BLOCK_APK="$PWD/out/openwrt/block-mount-guarded.apk" \
+            python3 openwrt/tests/block-probe.py
+      - uses: actions/download-artifact@v4
+        with:
+          name: openwrt-installer-windows
+          path: installer/artifacts/windows
+      - uses: actions/download-artifact@v4
+        with:
+          name: openwrt-installer-macos-arm64
+          path: ${{ runner.temp }}/installer-macos
+      - name: Restore native macOS artifact
+        run: |
+          mkdir -p installer/artifacts/macos-arm64
+          tar -xzf "$RUNNER_TEMP/installer-macos/openwrt-installer-macos-arm64.tar.gz" -C installer/artifacts/macos-arm64
+          {
+            echo "OPENWRT_GUI_ARTIFACT=$GITHUB_WORKSPACE/installer/artifacts/windows"
+            echo "OPENWRT_GUI_MACOS_ARTIFACT=$GITHUB_WORKSPACE/installer/artifacts/macos-arm64"
+          } >> "$GITHUB_ENV"
+      - name: Write the CI build layout
+        run: |
+          python3 - <<'EOF'
+          import json, os
+          repo = os.environ['GITHUB_WORKSPACE']
+          ws = os.environ['CX60_WS']
+          rt = os.environ['RUNNER_TEMP']
+          data = json.load(open('tools/build-layout.json', encoding='utf-8'))
+          data['base'] = f'{ws}/base/e5'
+          data['defaults'] = f'{repo}/work/e5-port/clean-openwrt-base.tar'
+          data['busybox'] = f'{repo}/work/busybox/ext/usr/bin/busybox'
+          data['block_apk'] = f'{repo}/out/openwrt/block-mount-guarded.apk'
+          data['wifi_apks'] = f'{repo}/work/wifi-sae'
+          data['iwinfo_apks'] = f'{repo}/work/iwinfo-ap-scan'
+          data['lpac_apks'] = f'{ws}/artifacts/lpac'
+          profile = data['profiles']['changxing60']
+          profile['kernel'] = f'{rt}/kernel'
+          profile['stock_boot'] = f'{repo}/dumps/changxing60-stock/boot_a.img'
+          profile['misc_head'] = f'{repo}/dumps/changxing60-stock/misc-head.bin'
+          profile['platform_config'] = f'{repo}/inputs/ums9620-base.config'
+          with open(f'{rt}/ci-layout.json', 'w', encoding='utf-8') as stream:
+              json.dump(data, stream, indent=2)
+          EOF
+      - name: Assemble the Changxing 60 installer package
+        run: |
+          set -o pipefail
+          sudo --preserve-env=OPENWRT_GUI_ARTIFACT,OPENWRT_GUI_MACOS_ARTIFACT,OPENWRT_GUI_ANDROID_ARTIFACT \
+            python3 tools/build-release.py package \
+            --workspace "$CX60_WS" --config "$RUNNER_TEMP/ci-layout.json" \
+            --profiles changxing60 --label changxing60-ci 2>&1 | tee "$RUNNER_TEMP/package.log"
+      - name: Collect release files and notes
+        id: collect
+        env:
+          INPUTS_SHA256: ${{ vars.E5_CX60_CI_INPUTS_SHA256 }}
+        run: |
+          set -euo pipefail
+          dir=$(find out/releases -mindepth 1 -maxdepth 1 -type d -not -name '.*' | head -1)
+          [ -n "$dir" ] || { echo '::error::No release directory'; exit 1; }
+          zip=$(find "$dir" -maxdepth 1 -name '*.zip' | head -1)
+          stem=$(basename "$zip" .zip)
+          (cd "$dir" && sha256sum ./*.zip > SHA256SUMS)
+          python3 - "$dir" "$stem" <<'EOF'
+          import json, os, sys
+          from pathlib import Path
+          directory, stem = Path(sys.argv[1]), sys.argv[2]
+          run = json.loads((directory / 'BUILD-RUN.json').read_text())
+          source = run['source']
+          notes = [
+              f"# {stem}", '',
+              'Changxing 60 (ZTE 7552N / P720S20, UMS9620) OpenWrt 25.12.5 installer package.',
+              '畅行60 OpenWrt 25.12.5 安装包（含分级省电待机；深睡出厂禁用，需受控试验后启用）。', '',
+              f"- Source commit: `{source['source_commit']}` (dirty: {source['source_dirty']})",
+              f"- Kernel release: `6.18.54-changxing60-bringup4`",
+              f"- Bootstrap inputs SHA-256: `{os.environ['INPUTS_SHA256']}`", '',
+              '**Bring-up profile: formal installation and update are not hardware-validated.**',
+              '**刷机/更新前备份重要配置；首次更新须用户在场，保持供电。**', '',
+              'Update path: GUI "更新 OpenWrt" (same kernel release and OpenWrt version only).',
+              'See docs/CI-CHANGXING60.zh-CN.md and docs/POWER-STANDBY-20261117.zh-CN.md.',
+          ]
+          (directory / 'release-notes.md').write_text('\n'.join(notes) + '\n', encoding='utf-8')
+          EOF
+          if [ "$GITHUB_EVENT_NAME" = push ]; then tag="$GITHUB_REF_NAME"; else tag="$stem"; fi
+          {
+            echo "tag=$tag"
+            echo "title=Changxing 60 OpenWrt $E5_WRT_VER · $stem"
+            echo "dir=$dir"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cx60-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.collect.outputs.dir }}/*.zip
+            ${{ steps.collect.outputs.dir }}/SHA256SUMS
+            ${{ steps.collect.outputs.dir }}/BUILD-RUN.json
+            ${{ steps.collect.outputs.dir }}/release-notes.md
+          compression-level: 0
+          if-no-files-found: error
+      - name: Upload build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cx60-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            out/build-logs/
+            out/build-state/
+            ${{ runner.temp }}/package.log
+          if-no-files-found: ignore
+
+  publish:
+    needs: build
+    if: github.event_name == 'push' || inputs.publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: cx60-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release
+      - name: Publish validated files through a draft release
+        working-directory: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          AUTO_TAG: ${{ needs.build.outputs.tag }}
+          TITLE: ${{ needs.build.outputs.title }}
+          SOURCE: ${{ needs.build.outputs.source }}
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          PRERELEASE: ${{ github.event_name == 'push' || inputs.prerelease }}
+        run: |
+          sha256sum --check SHA256SUMS
+          tag="$AUTO_TAG"
+          if [ "$EVENT" = push ]; then tag="$REF_NAME"; fi
+          # Refuse to replace a published release; failed uploads may leave a draft.
+          if gh release view "$tag" --json isDraft >/dev/null 2>&1; then
+            [ "$(gh release view "$tag" --json isDraft --jq .isDraft)" = true ] || { echo '::error::Release already published; use a new tag or a manual build.'; exit 1; }
+          else
+            gh release create "$tag" --target "$SOURCE" --title "$TITLE" --notes-file release-notes.md --draft
+          fi
+          gh release upload "$tag" ./*.zip SHA256SUMS BUILD-RUN.json --clobber
+          args=(--draft=false --title "$TITLE" --notes-file release-notes.md)
+          if [ "$PRERELEASE" = true ]; then args+=(--prerelease --latest=false); else args+=(--prerelease=false --latest); fi
+          gh release edit "$tag" "${args[@]}"
+          gh release view "$tag" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"

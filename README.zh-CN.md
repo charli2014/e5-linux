@@ -13,8 +13,9 @@ Unisoc UMS9621/UMS9620 系列 5G 热点（荣悦 E5、T551M、畅行60 等）的
 畅行60（中兴 7552N / P720S20，UMS9620）的板级 profile `devices/changxing60/`
 来自上游。
 
-本 fork 目前在上游之上的独立修改只有一项：**畅行60 分级省电待机**
-（2026-11-17 代码完成，尚未部署真机）：
+本 fork 目前在上游之上的独立修改有两项。
+
+**一、畅行60 分级省电待机**（2026-11-17 代码完成，尚未部署真机）：
 
 - `e5-power-state` 守护进程 + `e5-power` 服务：ONLINE → IDLE（无 Wi-Fi 客户端且无
   USB 数据对端连续 30 分钟：经现有 data-sim 射频 job 关蜂窝/蓝牙、停 SIM 轮询，
@@ -30,6 +31,14 @@ Unisoc UMS9621/UMS9620 系列 5G 热点（荣悦 E5、T551M、畅行60 等）的
 - 其它机型不受影响（默认 idle 0 / deep 0）。改动台账：
   [docs/POWER-STANDBY-20261117.zh-CN.md](docs/POWER-STANDBY-20261117.zh-CN.md)；
   状态机测试：`devices/test_power_state.py`（28 项）。
+
+**二、畅行60 CI 编译发布流水线**（2026-11-17 代码完成，待一次性准备后首跑）：
+`.github/workflows/changxing60-release.yml` 用公开的 `Enceka/linux-lts-e5`
+供体提交编译板级内核，经 `tools/build-release.py` 组装安装包并发布
+（预）Release。私有构建输入由
+`tools/ci-inputs.py create --profile changxing60` 打成哈希锁定的引导包；
+E5 发布工作流不受影响。准备步骤与约束见
+[docs/CI-CHANGXING60.zh-CN.md](docs/CI-CHANGXING60.zh-CN.md)。
 
 T551M 使用独立的[设备适配说明](devices/t551m/README.md)，包含充电、GPIO 背光、
 32 位厂商运行环境和 NV 隔离。请按该说明构建、试启动 T551M。
