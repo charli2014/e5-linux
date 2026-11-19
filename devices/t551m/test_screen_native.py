@@ -148,7 +148,7 @@ class ScreenPipeline(unittest.TestCase):
     def test_wake_enables_pipeline_before_backlight(self):
         (self.cfg/'ctl_state').write_text('off\n')
         self.call('set','180')
-        self.assertEqual(self.calls()[0],'on')
+        self.assertEqual(self.calls(),['status','on'])
         self.assertEqual(self.light.read_text(),'180\n')
         self.assertEqual((self.cfg/'ctl_state').read_text(),'on\n')
 
