@@ -245,7 +245,7 @@ window.T551M = (() => {
 <div id="mobile-toolbar"><button id="mobile-back" aria-label="主页">${svg('home')}</button><h1 id="mobile-title">概览</h1><div id="mobile-loading" class="screen-loading" role="status" aria-label="读取中…" hidden><i aria-hidden="true"></i></div><button id="mobile-lock" aria-label="锁屏">${svg('lock')}</button><button id="mobile-more" aria-label="全部页面">${svg('menu')}</button></div>
 <nav id="mobile-nav" aria-label="主导航"></nav>
 <aside id="mobile-menu" hidden><div class="mobile-sheet-head"><h2 id="mobile-menu-title">全部页面</h2><button id="mobile-menu-close" aria-label="关闭">${svg('close')}</button></div><div class="mobile-grid">${titles.map((_, i) => `<button data-page="${i}">${svg(pageIcons[i])}<span data-page-label="${i}">${label(i)}</span></button>`).join('')}</div></aside>
-<section id="mobile-lockscreen" role="region" aria-label="锁屏"><div class="lock-top"><span id="lock-symbol">${svg('lock')}</span><div id="lock-date">—</div><div id="lock-time">--:--</div><div class="lock-online"><i></i><span id="lock-network">随身网络</span></div></div>
+<section id="mobile-lockscreen" role="region" aria-label="锁屏"><div class="lock-top"><span id="lock-symbol">${svg('lock')}</span><div id="lock-date">—</div><div id="lock-time">--:--</div><div class="lock-online"><i></i><span id="lock-network">随身网络</span></div><div class="lock-online" id="lock-clients-row"><i></i><span id="lock-clients">—</span></div></div>
 <div id="lock-summary"><div class="lock-usage"><div id="lock-day"><span id="lock-day-label">今日已用</span><strong id="lock-day-value">—</strong></div><div id="lock-month"><span id="lock-month-label">本月已用</span><strong id="lock-month-value">—</strong></div></div>
 <div id="lock-rates"><div><span>↓ <span id="lock-rx-label">下载</span></span><strong id="lock-rx">—</strong></div><div><span>↑ <span id="lock-tx-label">上传</span></span><strong id="lock-tx">—</strong></div></div>
 </div><div id="lock-swipe">${svg('up')}<span id="lock-hint">从下方向上滑动解锁</span><i></i></div></section>`);
@@ -459,6 +459,10 @@ window.T551M = (() => {
         }
         setText('lock-network', data.wan?.up ? words('蜂窝网络已连接', 'Mobile network connected') : words('等待网络连接', 'Connecting'));
         el('lock-network').parentNode.classList.toggle('offline', !data.wan?.up);
+        const clients = data.clients ?? [];
+        const nw = clients.filter(c => c.via == 'wifi').length, nu = clients.filter(c => c.via == 'usb').length;
+        setText('lock-clients', clients.length ? words(`在线设备 ${clients.length}台`, `${clients.length} clients`) + (nw ? ` · Wi-Fi ${nw}` : '') + (nu ? ` · USB ${nu}` : '') : words('无在线设备', 'No clients'));
+        el('lock-clients-row').classList.toggle('empty', !clients.length);
         if (screenLocked) usage();
         if (first) {
             // Page restart must restore a physically responsive panel too.

@@ -183,3 +183,19 @@ state==1 不成立，管线 off 命令不发（两段式息屏静默退化为仅
 改动：screen-power.c ctl_exec 读到输出后补 out[strcspn(out,"\r\n")]=0。
 该 C 测试此前本地无 gcc、WSL 损坏从未执行，本次 CI 首次运行即暴露。
 验证以 CI Linux 为权威（changxing60-release.yml 屏组件测试步骤）。
+
+## 2026-11-19 唤醒测试断言修正 + 锁屏在线设备数
+
+CI run 44523481567：去换行修复生效，ScreenPipeline 15 项中 4 失败降为
+1 失败。余下 test_wake_enables_pipeline_before_backlight 断言
+calls()[0]=='on' 过严：reconcile 唤醒路径先 ctl_state() 查询（记为
+status）再发 on，实际序列 ['status','on']。该断言在"先查后开"设计下
+从未成立（修复前 on 不发亦失败）。功能语义无误——管线先于背光使能由
+reconcile 代码顺序保证，末态 brightness=180、ctl_state=on 均成立。
+改断言为精确序列 ['status','on']；其余唤醒测试用 assertIn 不受影响。
+
+锁屏首页新增"在线设备 N台 · Wi-Fi x · USB y"（无设备时"无在线设备"，
+圆点置灰）。数据复用状态接口现成 clients（hostapd get_clients + DHCP
+租约，base/api.uc），后端零改动；mobile.js 锁屏渲染回调直接取
+data.clients，mobile.css 复用 .lock-online 布局加 .empty 灰点。
+mobile.js 经 stage.py 原样拷贝、mobile.css 仅字体缩放，不触锚点替换。
