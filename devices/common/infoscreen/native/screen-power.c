@@ -254,6 +254,7 @@ static int ctl_exec(const char *cmd, char *out, size_t outsz) {
     }
     if (out) {
         out[got] = 0;
+        out[strcspn(out, "\r\n")] = 0;
         if (ready <= 0)
             return -1;
     }

@@ -167,3 +167,19 @@ Windows 本地跑会因 NTFS mtime 分辨率使 reload 漏读配置变更而随�
 regulator_ignore_unused"是 M8/T551M 时期历史表述。畅行60 真机
 /proc/cmdline 从来没有这三个参数，test_profile.py 也禁止加入，
 "逐个移除"试验不适用于本机。
+
+## 2026-11-18 屏管线状态解析缺陷：ctl_exec 输出去换行
+
+CI run 44322121153 编译全部通过，但 test_screen_native.py 的
+ScreenPipeline 4 项失败：output-ctl 只被调 status，on/off 从不发出。
+
+根因：screen-power.c 的 ctl_exec 读 output-ctl 输出后未去掉尾部换行，
+而 e5-output-ctl status 用 puts("on"/"off") 带 \n。ctl_state() 以
+strcmp(v,"on") 比较 "on\n" 永不等，恒返回 -1。真机后果：熄屏时
+state==1 不成立，管线 off 命令不发（两段式息屏静默退化为仅关背光）；
+唤醒时 ctl_state()==0 不成立，亮屏前不先恢复管线（可能点亮黑帧）。
+同文件 uci_get 本有 strcspn 去换行，ctl_exec 漏了。
+
+改动：screen-power.c ctl_exec 读到输出后补 out[strcspn(out,"\r\n")]=0。
+该 C 测试此前本地无 gcc、WSL 损坏从未执行，本次 CI 首次运行即暴露。
+验证以 CI Linux 为权威（changxing60-release.yml 屏组件测试步骤）。
