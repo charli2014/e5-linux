@@ -224,3 +224,17 @@ fatal signal 11）。修复：容器补装原生 bison/flex/m4，inner 脚本每
 openwrt-25.12 分支 fstools Makefile（PKG_SOURCE_VERSION 与 pin 一致）
 Package/block-mount/install 仍装 libblkid-tiny.so 到 /lib；util-linux
 只是 PKG_BUILD_DEPENDS。
+
+## 2026-11-20 首次组装缺 UFS 身份助手（CI 第五次失败修复）
+
+CI run 44734389519：block-mount 全过（m4 修复生效），首次进入组装步，
+3 秒即失败：stage-ufs.py 找不到 out/changxing60/ufs-id.build.json。
+原因：ufs-id 静态 arm64 助手在构建机是一次性注册的本地输入，CI 从未
+编过。修复：workflow 组装前新增步骤 python3 tools/build-ufs-id.py
+--cc aarch64-linux-gnu-gcc（runner 已装该交叉编译器；产物路径与
+tools/build-layout.json 默认一致，回执 sha 与 tools/ufs-id.c 源码绑定）。
+同批把组装链剩余外部依赖全部静态核查：5 个助手+bootctl 用 --cc 默认
+aarch64-linux-gnu-gcc 现编；at-client/at-owner/sml-voltage 同默认；
+aurora 4 包按 sha 钉死从 GitHub Release 下载（本次 run 已过该步）；
+kernel 产物完整性由 check-container-support 在组装前通过自证；
+installer 子模块递归检出（pin 57e159c）；audit 断言逐项对照属主源码。

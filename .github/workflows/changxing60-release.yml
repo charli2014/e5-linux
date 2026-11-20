@@ -224,6 +224,8 @@ jobs:
           with open(f'{rt}/ci-layout.json', 'w', encoding='utf-8') as stream:
               json.dump(data, stream, indent=2)
           EOF
+      - name: Build the static UFS identity helper
+        run: python3 tools/build-ufs-id.py --cc aarch64-linux-gnu-gcc
       - name: Assemble the Changxing 60 installer package
         run: |
           set -o pipefail
