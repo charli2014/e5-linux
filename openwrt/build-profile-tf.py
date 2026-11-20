@@ -126,7 +126,7 @@ def main():
         # Incremental builds must also add newly mandatory packages to old bases.
         'apk_retry --root /target update >/dev/null && '
         'apk_retry --root /target --no-scripts add ttyd luci-app-ttyd luci-i18n-ttyd-zh-cn luci-i18n-ttyd-tr iw-full '
-        'python3-openssl ca-bundle rpcd-mod-ucode ucode-mod-fs ucode-mod-ubus ucode-mod-uci ucode-mod-uloop ucode-mod-rtnl ucode-mod-nl80211 && '
+        'python3-openssl ca-bundle rpcd-mod-ucode ucode-mod-fs ucode-mod-ubus ucode-mod-uci ucode-mod-uloop ucode-mod-rtnl ucode-mod-nl80211 f2fs-tools && '
         'sh /target/usr/libexec/e5-ttyd-bind /target && '
         'ln -sf ../init.d/ttyd /target/etc/rc.d/S99ttyd && '
         'ln -sf ../init.d/ttyd /target/etc/rc.d/K50ttyd && '
@@ -206,6 +206,9 @@ def main():
         ordered = runpy.run_path(str(TOP/'devices/changxing60/stage.py'))['early_module_order'](a.kernel,release)
         boot_order = a.work/'release-module-order.txt'
         boot_order.write_text('\n'.join(ordered)+'\n')
+    # The clean base ships libf2fs/mkf2fs but not fsck.f2fs/resize.f2fs; the
+    # early-recovery bundle is staged from the assembled root's own packages.
+    runpy.run_path(str(TOP / 'boot/prepare-f2fs-tools.py'))['stage'](root, TOP / 'out/boot/f2fs-tools')
     run('python3', TOP / 'boot/build-boot-image.py', '--stock-boot', a.stock_boot,
         '--misc-head', a.misc_head, '--kernel', a.kernel / 'Image.lk',
         '--modules', a.kernel / 'modules', '--module-order', boot_order,

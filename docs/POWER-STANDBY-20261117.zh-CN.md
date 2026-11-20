@@ -238,3 +238,32 @@ aarch64-linux-gnu-gcc 现编；at-client/at-owner/sml-voltage 同默认；
 aurora 4 包按 sha 钉死从 GitHub Release 下载（本次 run 已过该步）；
 kernel 产物完整性由 check-container-support 在组装前通过自证；
 installer 子模块递归检出（pin 57e159c）；audit 断言逐项对照属主源码。
+
+## 2026-11-20 misc 种子来源错误 + F2FS 恢复 bundle 缺口（CI 第六次失败修复）
+
+CI run 44740856762：ufs-id 步骤通过、干净 root 与全部 apk 安装通过，
+组装在 boot/build-boot-image.py:148 失败：'Selected Android slot is
+not successful/bootable'。
+取证：解码提交的 ci-seeds/misc-head.bin，BC 为 suffix _a、
+slot a=0x2f（优先级15/tries2/_successful=0_）、slot b=0x9e
+（优先级14/tries1/successful=1）——与 bootloader_control() 对
+"Android 在 b 槽、优先级15" 生成的 Linux 试用块逐字节一致。
+即该种子取自刷过 Linux 的运行中设备（试用态），不是出厂 misc；
+构建器按 suffix 推导出 Android 槽=a（Linux 试用槽，successful=0），
+校验正确拒绝。本机 Android 实际在 b 槽。
+修复：把种子重建为出厂 Android 回退态（suffix _b、slot b=0x9f
+优先级15/tries1/successful、slot a=0，CRC 重算）。验证：由此生成的
+Linux 试用块与设备当前_misc BC 逐字节相同_，Android 回退块
+（b 槽 p15 successful）语义与 r20261114 一致；不削弱任何校验。
+tools/tests/ci-seeds.py 16 项全过。
+同批前置审计发现下一个必然缺口：boot 镜像需要 out/boot/f2fs-tools
+早期恢复 bundle（fsck.f2fs/resize.f2fs 等 14 件），CI 从未生成；
+钉死 clean base 只带 libf2fs6/mkf2fs，缺 f2fsck。修复：组装 apk
+步骤补装 f2fs-tools（25.12.5 源内 1.16.0-r4，与 base 库同版；
+f2fsck 提供 fsck.f2fs 及 resize.f2fs 符号链接，已对照 openwrt-25.12
+Makefile 核实），并在 boot 构建前用 boot/prepare-f2fs-tools.py 从
+组装好的 root 直接生成 bundle——不再依赖构建机一次性注册输入。
+其余组装后段逐项核实无外部缺口：ext4-tools 只需 base 内
+e2fsck/resize2fs/flock+readelf（binutils 已装）；GUI/Diff Studio
+工件由 prepare-installers 按 installer-inputs.lock.json 下载并在
+input_check 预校验（上次 run 已过该关）；switch-apk 回执在库内。
