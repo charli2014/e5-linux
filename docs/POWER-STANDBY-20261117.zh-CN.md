@@ -210,3 +210,17 @@ qemu-x86_64 仿真下，jammy keyring 解析坏（NO_PUBKEY 871920D1991BC93C）�
 判定 PLAT（ARM runner 原生 arm64 容器），x86_64 SDK 二进制经宿主
 binfmt_misc 在容器内运行。补装 util-linux（flock）。改动不在编译缓存
 key 的 hashFiles 范围内，下次运行编译步直接命中缓存（省约 57 分钟）。
+
+## 2026-11-20 block-mount 二次修复：qemu 下 m4 段错误
+
+CI run 44727593916：容器架构修复生效（apt/SDK 下载/feeds/约 35 分钟交叉
+编译全过），但 fstools 的构建依赖 util-linux 在 ninja 180/701 步失败：
+SDK 自带 x86_64 bison 调 m4 子进程，m4 在 qemu-user 下段错误
+（QEMU internal SIGSEGV MAPERR addr=0x20，bison: m4 subprocess got
+fatal signal 11）。修复：容器补装原生 bison/flex/m4，inner 脚本每次
+运行把 staging_dir/host/bin/{bison,flex,m4} 覆盖为原生架构二进制
+（幂等，兼容已缓存 SDK），其余工具链继续走 binfmt。
+另核实：block-probe 真 APK 测试断言 /lib/libblkid-tiny.so 无需改——
+openwrt-25.12 分支 fstools Makefile（PKG_SOURCE_VERSION 与 pin 一致）
+Package/block-mount/install 仍装 libblkid-tiny.so 到 /lib；util-linux
+只是 PKG_BUILD_DEPENDS。

@@ -16,6 +16,15 @@ if [ ! -d "$sdk" ]; then
     tar --zstd -xf sdk.tar.zst
 fi
 cd "$sdk"
+# qemu-user segfaults on the SDK's x86_64 m4 ("bison: m4 subprocess got
+# fatal signal 11"), killing the util-linux build that fstools needs.
+# Swap the parser generators for native-arch binaries; the rest of the
+# SDK toolchain runs fine under binfmt. Idempotent across cached SDKs.
+for t in bison flex m4; do
+    if [ -e "staging_dir/host/bin/$t" ]; then
+        cp -f "$(command -v "$t")" "staging_dir/host/bin/$t"
+    fi
+done
 export FORCE_UNSAFE_CONFIGURE=1
 if [ ! -f package/feeds/base/fstools/Makefile ]; then
     ./scripts/feeds update base
