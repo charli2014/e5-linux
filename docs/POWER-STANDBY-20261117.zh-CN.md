@@ -199,3 +199,14 @@ reconcile 代码顺序保证，末态 brightness=180、ctl_state=on 均成立。
 租约，base/api.uc），后端零改动；mobile.js 锁屏渲染回调直接取
 data.clients，mobile.css 复用 .lock-online 布局加 .empty 灰点。
 mobile.js 经 stage.py 原样拷贝、mobile.css 仅字体缩放，不触锚点替换。
+
+## 2026-11-19 block-mount 容器改原生架构（CI 第三次失败修复）
+
+CI run 44537126234：编译与屏测试全过、缓存首次落盘（key …d20b54ce），
+第 15 步 block-mount 失败。原因：block-mount.Dockerfile 用 ubuntu:22.04
+且 --platform linux/amd64 硬编码，ARM runner 上整个容器（含 apt）跑在
+qemu-x86_64 仿真下，jammy keyring 解析坏（NO_PUBKEY 871920D1991BC93C）。
+修复对齐 hostapd/lpac 已验证模式：debian:trixie 基础镜像 + uname -m
+判定 PLAT（ARM runner 原生 arm64 容器），x86_64 SDK 二进制经宿主
+binfmt_misc 在容器内运行。补装 util-linux（flock）。改动不在编译缓存
+key 的 hashFiles 范围内，下次运行编译步直接命中缓存（省约 57 分钟）。

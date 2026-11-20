@@ -18,10 +18,11 @@ if [ -s "$OUT" ] && [ -s "$OUT.build-id" ] && [ -s "$OUT.sha256" ] &&
     echo "block-mount: verified patched APK cache"
     exit 0
 fi
-docker build --platform linux/amd64 -t e5-block-sdk-build -f "$TOP/openwrt/block-mount.Dockerfile" "$TOP/openwrt"
+case "$(uname -m)" in x86_64) PLAT=linux/amd64;; aarch64|arm64) PLAT=linux/arm64;; *) echo 'Unsupported build host architecture' >&2; exit 1;; esac
+docker build --platform "$PLAT" -t e5-block-sdk-build -f "$TOP/openwrt/block-mount.Dockerfile" "$TOP/openwrt"
 # A named volume keeps SDK builds off slow Windows bind mounts. An explicit
 # cache directory can also be supplied by Linux/WSL developers.
 cache=${E5_BLOCK_SDK_CACHE:-e5-block-sdk-25.12.5}
-docker run --rm --platform linux/amd64 -v "$cache:/cache" -v "$TOP/openwrt:/src:ro" \
+docker run --rm --platform "$PLAT" -v "$cache:/cache" -v "$TOP/openwrt:/src:ro" \
     -v "$(dirname "$OUT"):/out" -e "OUT_NAME=$(basename "$OUT")" -e "BUILD_ID=$stamp" \
     e5-block-sdk-build sh /src/build-block-mount-inner.sh
