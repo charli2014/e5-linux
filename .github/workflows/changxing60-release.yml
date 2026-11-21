@@ -238,6 +238,9 @@ jobs:
           BOOTSTRAP_SHA256: ${{ steps.bootstrap.outputs.sha256 }}
         run: |
           set -euo pipefail
+          # Assemble runs under sudo, so the release tree is root-owned; the
+          # checksum/notes writes below need the runner user to own it.
+          sudo chown -R "$(id -un):$(id -gn)" out/releases
           dir=$(find out/releases -mindepth 1 -maxdepth 1 -type d -not -name '.*' | head -1)
           [ -n "$dir" ] || { echo '::error::No release directory'; exit 1; }
           zip=$(find "$dir" -maxdepth 1 -name '*.zip' | head -1)

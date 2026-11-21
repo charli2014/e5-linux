@@ -267,3 +267,20 @@ Makefile 核实），并在 boot 构建前用 boot/prepare-f2fs-tools.py 从
 e2fsck/resize2fs/flock+readelf（binutils 已装）；GUI/Diff Studio
 工件由 prepare-installers 按 installer-inputs.lock.json 下载并在
 input_check 预校验（上次 run 已过该关）；switch-apk 回执在库内。
+
+## 2026-11-20 组装首次成功；Collect 步 root 目录写权限（CI 第七次失败修复）
+
+CI run 44750619884（7609b94）：**组装步首次全程通过**——misc 种子修复
+生效（boot 镜像构建过）、f2fs-tools 补装+bundle 生成生效（日志
+'Staged ARM64 fsck.f2fs bundle'）、干净 root 审计过、mke2fs/e2fsck 过、
+ext4-tools/install-lock 过、finalize+安装包自检过，产出
+changxing60-openwrt-25.12.5-r20261120.145034-g7609b941-se7d033a9-k6.18.54.zip
+（272,856,695 字节），build-release 校验 state=complete。
+失败移到下一步 Collect release files and notes（exit 1，无 ::error::
+注解→不是显式错误分支）。定位：组装用 sudo 跑，out/releases/<task>
+归 root 所有（755），Collect 以 runner 用户往其中写 SHA256SUMS
+（shell 重定向）与 release-notes.md（python write_text）必然
+Permission denied；latest.json state=complete 证明目录已完成改名、
+find 能找到，排除"无 release 目录"分支。修复：Collect 开头
+sudo chown -R runner out/releases。publish job 只读 artifact 不受影响。
+tools/tests/ci-seeds.py 16 项过。
