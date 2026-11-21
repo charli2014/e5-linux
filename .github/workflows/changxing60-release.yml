@@ -134,6 +134,7 @@ jobs:
             openwrt/device-stage-part-update.sh boot/part-update.sh
           python3 devices/test_power_state.py
           python3 devices/test_staging.py
+          python3 devices/changxing60/test_screen_defaults.py
           python3 openwrt/tests/image-keep-config.py
           python3 openwrt/tests/update-device-files.py
           python3 tools/tests/ci-release.py

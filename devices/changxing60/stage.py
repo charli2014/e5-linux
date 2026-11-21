@@ -19,6 +19,16 @@ def scale_session(text):
     return text.replace(command, scaled, 1)
 
 
+# Upgrades preserve the previous /etc/config, so the options written below only
+# reach fresh installs. Fill them once at first boot and keep an explicit choice.
+SCREEN_DEFAULTS_SCRIPT = '''#!/bin/sh
+uci -q get e5-infoscreen.main.pipeline_off >/dev/null 2>&1 || uci -q set e5-infoscreen.main.pipeline_off='1'
+uci -q get e5-infoscreen.main.pipeline_grace >/dev/null 2>&1 || uci -q set e5-infoscreen.main.pipeline_grace='10'
+uci -q commit e5-infoscreen
+exit 0
+'''
+
+
 def stage_screen(root):
     root = Path(root)
     if (root / 'etc/e5/device-profile').read_text().strip() != 'changxing60':
@@ -36,6 +46,10 @@ def stage_screen(root):
         if len(re.findall(r'^config\s', text, re.M)) != 1:
             raise ValueError('Unexpected infoscreen config layout')
         config.write_text(text.rstrip('\n') + "\n\toption pipeline_off '1'\n\toption pipeline_grace '10'\n")
+    defaults = root / 'etc/uci-defaults/97-changxing60-screen'
+    defaults.parent.mkdir(parents=True, exist_ok=True)
+    defaults.write_bytes(SCREEN_DEFAULTS_SCRIPT.replace('\r\n', '\n').encode())
+    defaults.chmod(0o755)
 
 
 def early_module_order(kernel, release):

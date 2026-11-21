@@ -284,3 +284,40 @@ Permission denied；latest.json state=complete 证明目录已完成改名、
 find 能找到，排除"无 release 目录"分支。修复：Collect 开头
 sudo chown -R runner out/releases。publish job 只读 artifact 不受影响。
 tools/tests/ci-seeds.py 16 项过。
+
+## 2026-11-21 出包成功、真机核查与 P0 升级配置迁移
+
+CI run 44849582263（5d01638）全部通过，发布
+changxing60-openwrt-25.12.5-r20261121.020000-g5d016382-s37758b6e-k6.18.54
+（zip 272,771,265 字节）。用户当日用该包 --update 刷机并重启。
+
+真机只读核查（root@192.168.9.1，取证脚本在 work/power-audit/，未入库）：
+- 版本：内核 6.18.54-changxing60-bringup4，/etc/e5/image-version 与
+  release commit 一致。
+- 生效：workqueue.power_efficient=1、PM_DEBUG（/sys/power/pm_test）、
+  e5-power S97/K05 + 状态机 ONLINE（idle30/deep0/hold5）、DEEP 门同时读
+  wake_lock 与 wakeup_sources 且两者可读、cage+cog --scale=1.25、
+  e5-output-ctl 实测 status=on、锁屏在线设备数（#lock-clients，按
+  wifi/usb 分类）、aurora 主题、LuCI admin/modem/power（view mu300/power，
+  ubus e5-power get 正常）、ttyd/msmtp/openssl、sipa_eth0 数据与 ping、
+  e5-ufs-id + sml-voltage-check + media-max=33。
+- 更新布局：misc 变为 suffix _b（Linux 试运行在 b 槽，Android 回退在
+  a 槽 p14/successful），即更新写非活动槽；试用槽不标记 successful 与
+  r20261114 长期运行状态一致，属既定设计。
+- 开机 2 条 ModemManager "couldn't find the ModemManager process" 为启动
+  竞态，MM 1.24 起来后 modem/bearer 正常连接，不处理。
+
+发现真实升级缺陷（P0 未生效）：升级 keep_config（device-install-image.sh
+拷贝旧 etc/config）把镜像内 stage.py 写入的 pipeline_off/pipeline_grace
+覆盖掉；screen-power.c 缺该选项即退回"只关背光"。证据：设备
+/etc/config/e5-infoscreen mtime 11-19（早于本包 11-21 构建时间），
+uci get 两个选项均 Entry not found。全新刷机不受影响。
+修复（用户选 C）：
+1) 设备端已补 uci set pipeline_off=1 / pipeline_grace=10 并重启
+   t551m-screen-power；实测息屏 13 秒后 e5-output-ctl status=off，
+   点亮后恢复 on——管线关断真机首次验证通过。
+2) 仓库加幂等迁移：stage_screen 额外写
+   etc/uci-defaults/97-changxing60-screen，仅在选项缺失时补默认值
+   （显式 0 保留用户选择）。新增 devices/changxing60/test_screen_defaults.py
+   3 项（新鲜配置写入+幂等、显式选择保留、迁移脚本仅补缺失），
+   并加入 CI 测试步。
