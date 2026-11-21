@@ -37,6 +37,7 @@ struct axs_touch {
     struct notifier_block panel;
     struct delayed_work esd;
     bool running, display_on, suspended;
+    bool fresh;
     unsigned int ff_count;
     unsigned int reports_logged;
     unsigned long last_irq;
@@ -179,12 +180,26 @@ static irqreturn_t axs_irq(int irq, void *data)
     if (verify_pram && ts->reports_logged++ < 4)
         dev_info(&ts->spi->dev, "diagnostic report: %8phN\n", report);
     ts->ff_count=report[0]==0xff ? ts->ff_count+1 : 0;
-    if (((report[0]&0xe0) && !(report[0]&~0xe0)) || ts->ff_count>=3) {
-        dev_warn_ratelimited(&ts->spi->dev,
-                             "touch controller ESD report: %8phN\n", report);
-        sprd_touch_panel_report_esd();
-        axs_release(ts);
-        goto out;
+    {
+        /* The controller emits one 0x20 status packet as its first report
+         * after each RAM download. Forwarding it makes the panel do a visible
+         * disable/enable ESD recovery on every wake. A real ESD leaves the
+         * controller silent, which the heartbeat work still reports. */
+        bool fresh=READ_ONCE(ts->fresh);
+        WRITE_ONCE(ts->fresh,false);
+        if (((report[0]&0xe0) && !(report[0]&~0xe0)) || ts->ff_count>=3) {
+            if (fresh) {
+                dev_info_ratelimited(&ts->spi->dev,
+                                     "ignoring startup report: %8phN\n", report);
+                axs_release(ts);
+                goto out;
+            }
+            dev_warn_ratelimited(&ts->spi->dev,
+                                 "touch controller ESD report: %8phN\n", report);
+            sprd_touch_panel_report_esd();
+            axs_release(ts);
+            goto out;
+        }
     }
     if ((report[0]&0xf0) || (report[0]&0x08) || (report[1]&0xf0))
         goto out;
@@ -258,6 +273,7 @@ static int axs_start(struct axs_touch *ts)
     ts->ff_count=0;
     ts->reports_logged=0;
     WRITE_ONCE(ts->last_irq,jiffies);
+    WRITE_ONCE(ts->fresh,true);
     WRITE_ONCE(ts->running,true);
     enable_irq(ts->spi->irq);
     schedule_delayed_work(&ts->esd,msecs_to_jiffies(1000));
