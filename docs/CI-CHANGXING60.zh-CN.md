@@ -7,7 +7,7 @@
 
 | job | 运行器 | 内容 |
 |---|---|---|
-| `kernel` | ubuntu-24.04-arm | 公开内核源码 `Enceka/linux-lts-e5`（默认提交 `020b970e`，即本机登记的 UMS9620 供体基线）+ 仓库内种子基线 config，跑 `devices/changxing60/build-kernel.py`（含 prepare-kernel 补丁与全部板级测试），产出内核交付 tar |
+| `kernel` | ubuntu-24.04-arm | 公开内核源码 `Enceka/linux-lts-e5`（默认提交 `020b970e`，即本机登记的 UMS9620 供体基线）+ 仓库内种子基线 config，跑 `devices/changxing60/build-kernel.py`（含 prepare-kernel 补丁与全部板级测试；补丁含 `devices/common/power/` 的五个挂起补丁，见 `docs/SUSPEND-PATCHES-20261121.zh-CN.md`），产出内核交付 tar |
 | `build` | ubuntu-24.04-arm | 还原种子与锁定 clean base → `prepare-installers` 下载版本锁定的三平台安装器（sha256 + 源码指纹双校验）→ 导入 OpenWrt 25.12.5 armsr 基础镜像 → 省电/更新保留测试 → 编译 ModemManager/BlueZ/wifi-sae/iwinfo/lpac/原生屏组件（带缓存）与 guarded block-mount → `ci-inputs.py create` 引导门槛自检 → `sudo tools/build-release.py package --profiles changxing60`（唯一发布入口，Android 安装器由 input_check 自动构建）→ 校验 zip、写 SHA256SUMS 与发布说明 |
 | `publish` | ubuntu-24.04 | 沿用 E5 的草稿 Release 流程：校验哈希 → 建草稿 → 上传 → 发布；已发布的 tag 拒绝覆盖 |
 

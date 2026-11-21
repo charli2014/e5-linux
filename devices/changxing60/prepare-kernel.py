@@ -4,11 +4,45 @@
 The initial probe loads only display/USB; touch and power diagnostics are
 explicit make-probe options. No 41S SGM41513 address remap, ST7123 firmware
 or AW883xx amplifier is inherited.
+
+The system-suspend stack under common/power is applied to the donor kernel
+after the board preparation. 0006 is an increment on 0004/0005, so the order
+is not interchangeable.
 """
 from pathlib import Path
 import runpy
+import subprocess
 
 HERE=Path(__file__).resolve().parent
+
+POWER_PATCHES=(
+    '0001-watchdog-ump9620-stop-across-system-suspend.patch',
+    '0002-sprd-dpu-no-cancel-of-uninitialised-wb-work.patch',
+    '0004-drm-panfrost-sprd-power-the-GPU-off-across-system-su.patch',
+    '0005-soc-sprd-add-the-UMS9621-camera-subsystem-power-doma.patch',
+    '0006-sprd-stock-power-sequence-and-error-unwind.patch',
+)
+
+
+def apply_power_patches(kernel):
+    # git apply reads CRLF checkouts literally; normalize so a reused local
+    # kernel view and a fresh Linux CI checkout behave the same.
+    git=['git','-c','safe.directory='+str(kernel),'-C',str(kernel),'apply']
+
+    def run(patch, *args):
+        text=(HERE.parent/'common/power'/patch).read_text().replace('\r\n','\n')
+        return subprocess.run(git+list(args)+['-'],input=text,text=True,
+                              capture_output=True)
+
+    # The last patch covers the whole stack: once it reverses, nothing to do.
+    if run(POWER_PATCHES[-1],'--reverse','--check').returncode==0:
+        return
+    for patch in POWER_PATCHES:
+        if run(patch,'--reverse','--check').returncode==0:
+            continue
+        result=run(patch)
+        if result.returncode:
+            raise SystemExit(f'{patch} does not apply to {kernel}:\n{result.stderr}')
 
 
 def apply(kernel):
@@ -32,6 +66,7 @@ def apply(kernel):
     for path in ('common/dwc3-host-policy.py', 'common/dwc3-host-sink.py'):
         runpy.run_path(str(HERE.parent/path))['apply'](kernel)
     full['apply'](kernel)
+    apply_power_patches(kernel)
 
 
 if __name__=='__main__':

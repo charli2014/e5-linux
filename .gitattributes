@@ -6,3 +6,6 @@ devices/m8/port/** -text -whitespace
 installer/** text=auto eol=lf
 installer/ui/src-tauri/icons/*.ico binary
 installer/screenshots/*.png binary
+
+# Fed to git apply by the kernel preparation; CRLF would break every hunk.
+devices/common/power/*.patch text eol=lf
