@@ -8,6 +8,7 @@ pm_test staging is exercised against a temporary sysfs tree.
 import json
 from pathlib import Path
 import runpy
+import subprocess
 import tempfile
 import unittest
 
@@ -369,6 +370,37 @@ class SuspendStagingTest(unittest.TestCase):
         error = self.ops.suspend(True)
         self.assertIsNotNone(error)
         self.assertEqual((self.root / 'sys/power/pm_test').read_text(), 'none\n')
+
+
+class ServicePathTest(unittest.TestCase):
+    """Real Ops.service must invoke <root>/etc/init.d/<name>, not a str/str join."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / 'etc/init.d').mkdir(parents=True)
+        self.ops = Ops(self.root)
+        self.calls = []
+
+    def _run(self, returncode=0, stderr=''):
+        def run(args, timeout=60, stdin=None):
+            self.calls.append((args, timeout))
+            return subprocess.CompletedProcess(args, returncode, '', stderr)
+        self.ops.run = run
+
+    def test_start_stop_use_init_script_path(self):
+        self._run()
+        self.assertIsNone(self.ops.service('e5-bt', True))
+        self.assertIsNone(self.ops.service('t551m-sim-status', False))
+        self.assertEqual([c[0] for c in self.calls], [
+            [str(self.root / 'etc/init.d/e5-bt'), 'start'],
+            [str(self.root / 'etc/init.d/t551m-sim-status'), 'stop'],
+        ])
+
+    def test_failure_returns_stderr(self):
+        self._run(returncode=1, stderr='init failed\n')
+        self.assertEqual(self.ops.service('e5-bt', True), 'init failed\n')
 
 
 class WakelockReadTest(unittest.TestCase):

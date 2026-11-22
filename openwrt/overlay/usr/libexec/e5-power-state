@@ -117,7 +117,7 @@ class Ops:
 
     def service(self, name, on):
         try:
-            result = self.run([str(self.root / 'etc/init.d') / name, 'start' if on else 'stop'], timeout=90)
+            result = self.run([str(self.root / 'etc/init.d' / name), 'start' if on else 'stop'], timeout=90)
             return None if result.returncode == 0 else (result.stderr or 'service failed')[-180:]
         except (OSError, subprocess.SubprocessError) as error:
             return str(error)
