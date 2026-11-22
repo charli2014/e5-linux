@@ -1,447 +1,295 @@
-# Linux on the Rongyue E5 (Unisoc UMS9621)
+# 畅行60（ZTE 7552N / P720S20）OpenWrt 25.12.5 移植
 
-> 安装器已独立到 [openwrt-tools](https://github.com/kanoqwq/openwrt-tools)，本仓库通过 `installer/` 子模块固定引用。已有检出请执行 `git submodule update --init --recursive`；新检出使用 `git clone --recurse-submodules`。
+在 Unisoc UMS9620（T760）平台的中兴畅行60 上运行 OpenWrt 25.12.5：
+480×854 触摸屏、5G SA 数据、5 GHz 高带宽热点、USB NCM 管理口、
+分级省电待机和 GitHub Actions 自动出包。
 
-## This fork (charli2014/e5-linux)
+- 内核：`6.18.54-changxing60-bringup4`（公开供体 `Enceka/linux-lts-e5@020b970e` + 本仓库板级补丁）
+- 系统：OpenWrt 25.12.5（armsr/armv8），安装包内含 Windows/macOS/Android 安装器
+- 机型标识：`changxing60`；原厂 Android 13
+  `ZTE/CN_P720S20/P720S20:13/TP1A.220624.014/20240919.212928:user/release-keys`
+- 仓库是 [sprd-linux-devs/e5-linux](https://github.com/sprd-linux-devs/e5-linux) 的 fork；
+  荣悦 E5、T551M、M8、K1 等其它机型的资料仍在上游与各自 profile 中
 
-Upstream [sprd-linux-devs/e5-linux](https://github.com/sprd-linux-devs/e5-linux) is the
-Debian/OpenWrt port for the Unisoc UMS9621/UMS9620 5G hotspot family (Rongyue E5, T551M,
-Changxing 60 and others). The Changxing 60 (ZTE 7552N / P720S20, UMS9620) board profile
-`devices/changxing60/` is upstream work.
+> 这是 bring-up 项目：正式刷机、更新、重装、卸载尚未完成全部硬件组合验收。
+> 动手前先读本文的“安装与更新”和“已知限制”，并保留可恢复的 Android 槽位。
 
-This fork's own changes so far are two features.
+## 状态速览
 
-**1. Staged power-saving standby for Changxing 60** (code complete 2026-11-17,
-not yet deployed to hardware):
-
-- `e5-power-state` daemon + `e5-power` init service: ONLINE → IDLE (no Wi-Fi client and
-  no USB data peer for 30 min: cellular/BT off through the existing data-sim radio jobs,
-  SIM polling stopped, **hotspot kept**) → DEEP (hotspot off + system suspend).
-  DEEP ships disabled (`deep_min=0`) until a controlled suspend test passes on the board.
-- A persistent marker restores the radios if the device reboots while idle; wake holds
-  the device awake 5 min with short-episode backoff; audio, SIPA wakelock, upgrade locks
-  and USB peers gate suspend. ONLINE-state throughput is untouched by design.
-- Display: two-stage pipeline off via cage's native output-management protocol
-  (`e5-output-ctl`, no cage patch). Plus a CLOCK_BOOTTIME monotonic fix and
-  `workqueue.power_efficient=1` + PM_DEBUG in the board kernel config.
-- Dual UI: LuCI tab `admin/modem/power` and an info-screen power plugin, both on the
-  shared `e5-power` rpcd backend; `/etc/e5-power.json` is preserved across updates.
-- Other models are unaffected (defaults idle 0 / deep 0). Change ledger:
-  [docs/POWER-STANDBY-20261117.zh-CN.md](docs/POWER-STANDBY-20261117.zh-CN.md);
-  state-machine tests: `devices/test_power_state.py` (28 cases).
-
-**2. Changxing 60 CI build and release pipeline** (code complete 2026-11-17,
-first run pending one-time provisioning):
-`.github/workflows/changxing60-release.yml` compiles the board kernel from the
-public `Enceka/linux-lts-e5` donor commit, assembles the installer package
-through `tools/build-release.py` and publishes it as a (pre)release. Private
-build inputs travel in a hash-pinned bootstrap archive created by
-`tools/ci-inputs.py create --profile changxing60`; the E5 release workflow is
-untouched. Setup and caveats: [docs/CI-CHANGXING60.zh-CN.md](docs/CI-CHANGXING60.zh-CN.md).
-
-Maintainer notes: [stock behavior and new-device adaptation checklist](docs/NEW-DEVICE-STOCK-ADAPTATION.zh-CN.md),
-[shared charge/call/Wi-Fi evidence](docs/STOCK-CHARGE-CALL-WIFI-20261016.zh-CN.md).
-
-Windows desktop installer: extract the complete release package and run root `OpenWrt-Installer.exe`. Device selection, persistent recovery and the two-stage Android reset flow share the existing backend. Python/CLI and Magisk entries remain available. See the bilingual [user guide](installer/GUIDE.md), [build instructions](installer/README.md), and [verification/screenshots](installer/VERIFICATION.md). Multiple ADB devices can be selected in the GUI or interactive CLI, or explicitly bound with `--serial SERIAL`.
-
-
-> 中文文档：[`README.zh-CN.md`](README.zh-CN.md)
-
-T551M OpenWrt bring-up has a separate [device profile](devices/t551m/README.md),
-including its charger, GPIO backlight, 32-bit vendor runtime and isolated NV storage.
-Use that profile's build and trial procedure for T551M.
-
-LYM-10K has a separate [bring-up profile](devices/lym10k/README.md), with a
-source-built Hynitron touchscreen driver and its own factory charging policy.
-Hardware validation is pending; this profile is not a verified release.
-
-angelcare K1 has a separate [bring-up profile](devices/k1/README.md), sharing
-the M8 UMS9620 platform with K1's own panel and battery policy. Hardware boot
-and peripheral validation are pending; this profile is not a release image.
-
-Debian 13/Phosh and OpenWrt 25.12.5 on the Rongyue E5 5G handset/hotspot
-(`ums9158_1h10`, Unisoc UMS9621, Android 13). The installer detects and protects
-the current Android slot and uses the other boot slot for Linux.
-SD multiboot is the recommended installation layout. The
-installer checks available space and allocates only SD partitions; Android's
-eMMC partition table stays intact. Existing userdata loop-image installations
-remain supported.
-
-The current mainline build is Linux `6.18.54-e5-00072-g020b970e351e` from
-[`linux-lts-e5`](https://github.com/Enceka/linux-lts-e5), branch `e5-6.18`.
-Build the release kernel with `E5_RELEASE=1 upstream/build.sh` and the OpenWrt
-bundle with `E5_MAINLINE=1 openwrt/make-flash-bundle.sh`. The older vendor 5.15
-build remains in [`kernel_sprd_ums9158`](https://github.com/Enceka/kernel_sprd_ums9158)
-as a reference; its manual build procedure is retained below.
-
-> **Installation.** Flashing writes `boot_b` and the 32-byte boot-control block
-> in `misc`. Android slot A rollback has been verified on the E5. SD installation
-> changes the removable card's GPT; check installer selections before writing.
->
-> **Battery.** Charging works, but only because `aw32257_charger.ko` is loaded.
-> The driver does not share a name with the hardware it drives, and while it is
-> missing the charger also blocks USB entirely — `fw_devlink` inspects the USB
-> controller's devicetree suppliers before its probe function runs, and the
-> charger is one of them (`docs/FINDINGS.md` section 7.2).
->
-> **Which system boots.** Once a root filesystem is installed, Linux is the
-> persistent default (`/etc/e5linux/default-boot` says `linux`, and `e5-boot-ok`
-> re-arms slot b after every successful boot); `e5-next-boot android` from a
-> Linux shell goes back to Android.  A boot that never reaches userspace still
-> falls back to slot a on its own.  Without a root filesystem the initramfs stays
-> up standalone and reboots to Android after ten minutes unless `/run/stay`
-> exists.
-
-## Why this is not a copy of mu300-linux
-
-Three things are materially different on the E5, and each one changed the design:
-
-| | MU300 (UMS9620) | Rongyue E5 (UMS9621) |
+| 项目 | 状态 | 证据/边界 |
 |---|---|---|
-| free eMMC | unpartitioned space after `userdata` | **none** — `userdata` ends exactly at the GPT's last usable LBA |
-| where the ramdisk comes from | `boot` | `boot` (LK falls back to `init_boot` only if `boot`'s is empty) |
-| kernel | 5.4.254 from ZTE GPL source | 5.15.211 GKI + Unisoc platform from the E5 tree |
+| 内核与根文件系统启动 | 已实机通过 | 正式安装后正常重启；屏幕、触摸、声卡自动启动 |
+| 5G SA 数据 | 已实机通过 | ModemManager/netifd 正常，蜂窝 ICMP 成功；保留 SA 与高速 Wi-Fi 前提 |
+| 5 GHz 热点 | 已实机通过 | 信道 149、80 MHz；DHCP/NAT/IPv6 配置完整 |
+| 480×854 屏 + AXS15205 触摸 | 已实机通过 | 连续两轮息屏/亮屏、真实滑动坐标；缩放 1.25 |
+| 两段式息屏 | 已实机通过 | 背光归零后约 13 秒 `e5-output-ctl status=off` |
+| 充电 | 已实机通过 | BQ2560x、0x14 芯片 ID；DCP 常温 2.5 A 为本机策略 |
+| 电量计/满充端点 | 部分通过 | 停充/恢复、原厂时间交接通过；完整充放电精度未验收 |
+| 音频 | 部分通过 | 媒体、提示音、免提已出声；通话麦克风、最高音量未验收 |
+| 蓝牙 | 部分通过 | hci0 与真实扫描通过；配对与音频待验收 |
+| USB NCM 管理口 | 已实机通过 | `192.168.9.1`；OTG/扩展坞未覆盖全部物理组合 |
+| 分级待机 ONLINE→IDLE | 代码完成，真机 ONLINE 已验证 | IDLE 会关中射频/蓝牙、停 SIM 轮询、保留热点 |
+| 深睡 DEEP | 默认禁用（`deep_min=0`） | 挂起补丁已编译；真机挂起存活/唤醒时延/电量收益待受控试验 |
+| dwc3 运行时挂起 | 本次新增，待插线唤醒复核 | 仅畅行60 镜像启用；见“省电待机” |
+| GitHub Actions 出包 | 已多次发布 | 内核 ~20 分钟，安装包 ~57 分钟，测试在组装前执行 |
 
-The early implementation used `/data/e5linux/rootfs.ext4` as a loop image.
-Current installers prefer SD roots and a shared `e5boot` registry, supporting
-Debian/OpenWrt selections and separate A/B slots without changing eMMC GPT.
+完整的设备证据与未验收项见
+[devices/changxing60/README.md](devices/changxing60/README.md)。
 
-Read [`docs/FINDINGS.md`](docs/FINDINGS.md) for the measurements behind every
-one of these claims — the bootloader log that shows which ramdisk LK picks, the
-live `misc` `bootloader_control`, the exact GPT arithmetic, and the log
-channels that survive a failed boot.
+## 硬件
 
-## Status
-
-| Feature | State |
+| 项 | 值 |
 |---|---|
-| Custom Linux kernel (5.15.211, `e5_rongyue_defconfig` + Linux fragment) | ✅ builds |
-| Boot image builder (slot b, stock header/vbmeta/footer preserved) | ✅ |
-| Ramdisk in boot.img (LK's generic ramdisk path) | ✅ verified in the stock LK log |
-| `boot_b` trial + one-shot slot arming in `misc` | ✅ **boots** |
-| Rollback to Android when Linux never reaches userspace | ✅ verified — the device lands back on slot a |
-| Initramfs: dependency-ordered modules and USB rescue networking | ✅ current mainline boot image loads 45 staged modules |
-| **Linux boots on the device** | ✅ Debian and OpenWrt on the mainline kernel |
-| USB gadget network (NCM) | ✅ usb0 and the hotspot are one LAN, `br0` 192.168.9.1/24 (dnsmasq DHCP; the USB host always gets 192.168.9.2, with no default route); the initramfs rescue mode keeps 192.168.77.1 |
-| Battery charging under Linux | ✅ **verified — `battery/status = Charging`** |
-| DRM/KMS display (480x320 DSI panel, now `card1` -- panfrost takes `card0`) | ✅ phoc modesets it (active plane `320x480`, `allocated by = phoc.orig`) |
-| Debian 13 + Phosh root filesystem | ✅ SDDM autologins `phosh.desktop` |
-| Phosh session (phoc, wlroots' GLES2 renderer on the Mali-G57) | ✅ **verified** — `GL renderer: Mali-G57 (Panfrost)`, and the clients are on it too; docs/FINDINGS.md section 20.7 |
-| Re-arm from inside Linux (`e5-boot-ok`) | ✅ verified, `misc` byte-compared |
-| Touch panel under Linux | ✅ **works** — `tlsc6x_touch` on `event1`, udev tags it `ID_INPUT_TOUCHSCREEN=1`, and phoc takes its events |
-| Wi-Fi | ✅ **verified on the device** — `sprd_wlan_combo` + `wcn_bsp` on the WCN chip, scans 2.4 and 5 GHz APs out of the box (needs the firmware in the initramfs overlay and the vendor's *user* build variant); docs/FINDINGS.md sections 8.5-8.6 |
-| Bluetooth | ✅ the kernel configures the marlin3 core the way the vendor HAL does; the device scans, pairs and reconnects to headsets. OpenWrt A2DP output and BlueZ SDP discovery are verified. Cellular calls keep the device audio route by default; Bluetooth call microphone routing is separate work |
-| Session lifetime | ✅ fixed: the ~295 s silent reset was the PMIC watchdog; staging sprd_pmic_wdt.ko (which feeds it) gives sessions that run 10+ min -- docs/FINDINGS.md section 9 |
-| Modem, data and calls | ✅ **native**: `sipc_wwan` puts the AT channel on a WWAN port and ModemManager's `unisoc` plugin drives it; NetworkManager brings up IPv4 + IPv6 data. SMS and VoLTE calls work. The OpenWrt Phone app starts calls through the shared hostless voice route; receiver, speaker and microphone were verified in calls lasting over 30 seconds |
-| Modem fallback | [`unisoc-cpd`](https://github.com/Enceka/unisoc-cpd) stays installed, not enabled: `systemctl start unisoc-cpd` takes the modem back from ModemManager (and serves its page on `http://192.168.9.1:7887`) |
-| UFI-TOOLS (Linux port) | ✅ `http://<device>:2333`, login `admin` until changed |
-| Hotspot | ✅ NetworkManager's `Hotspot` connection (Phosh's switch and Settings' Wi-Fi panel, patched to recognise it; UFI-TOOLS, `nmcli`) on 5 GHz ch149 / 80 MHz (patched network-manager, `rootfs/deb-patches/`), SSID `E5-Linux`, a port of `br0` with the USB port; IPv4 NAT to the bearer, and the bearer's public IPv6 /64 by SLAAC for every LAN client (stateful firewall) — FINDINGS §35 |
-| Audio | ✅ speaker, microphone and receiver are verified. Normal playback uses ALSA/PipeWire; cellular calls use the hostless CP voice route and default to the receiver, with an explicit speaker switch. Bluetooth A2DP follows the connected headset and falls back to the speaker |
-| Idle load | ✅ load average ~0 at idle (it read 6+ from vendor threads in `D` and synchronous console output) — kernel `0015`, FINDINGS §29 |
-| OpenWrt | ✅ OpenWrt 25.12 as a second system in the root image or on the SD A/B layout: ModemManager WAN, IPv4 NAT + IPv6 LAN, USB + hotspot bridge, LuCI/SSH, Bluetooth A2DP, the info screen and the Phone app. The panel remains an info screen rather than a full desktop |
+| SoC | Unisoc UMS9620（T760），三簇 CPU，Mali-G57 |
+| 存储 | UFS，YMTC `YMUS8A1TC2A2C1`，约 119 GiB，4096 字节逻辑块 |
+| 原厂布局 | Android userdata 为 FBE+metadata 加密；需在线缩容或经用户确认清空后安装 |
+| 显示 | 480×854，两 lane DSI，`lcd_easyquick_aixiesheng_boe_mipi_hd` |
+| 触摸 | SPI AXS15205，32 字节报文，固件版本 `0019` |
+| 充电 | `ti,bq2560x_chg`，I2C 0x6b，芯片 ID 0x14 |
+| 音频 | AW87xxx PA；听筒/免提共用 AOL，按原厂 XML 生成路由与 10 档通话增益 |
+| 原厂系统槽位 | 本机 Android 在 B、诊断在 A；工具按当次实机槽位推导，不写死 |
 
-## Current tested versions and usage (2026-10-06)
+原厂固件、Android vendor 运行库、设备 dump 与 NV 不进入仓库；安装器从**接收方设备**
+读取所需内容。仓库里的 `work/`、`dumps/` 是本机取证目录（默认忽略），
+不得提交含 IMEI、SN、Wi-Fi 密码或 root 密码的文件。
 
-Mainline kernel `6.18.54-e5-00072-g020b970e351e`, OpenWrt `25.12.5`,
-ModemManager `1.24.0-r918`, info screen core `1.6.7`, Phone plugin `1.5`.
+## 安装与更新
 
-- **Single SIM (OpenWrt):** if the preferred data slot is empty, boot selects the
-  inserted slot automatically. Empty slots are skipped during CP power-up; LuCI
-  keeps physical SIM1/SIM2 numbering and identifies the selected data SIM.
-- **Charger auto-start (OpenWrt):** brings up NR/CH directly while retaining PM.
-  Modem, IPv4/IPv6 and info screen recovery are verified without an extra reboot.
-- **Dual-SIM SMS:** both cards receive and send without changing the data SIM.
-  Lists and alerts show the source card. LuCI provides merged/card-filtered
-  inboxes and shared or separate forwarding profiles; updating keeps the inbox.
-- **Dual-SIM calls (OpenWrt):** choose SIM1/SIM2 in **Info screen → Apps → Phone**.
-  Native ModemManager call objects retain their source slot. SIM2 outgoing
-  downlink and incoming alerts are tested. SIM2 uplink, answered incoming audio
-  and a sustained 30-second call remain unverified; one voice frontend is shared.
-  Details and API extensions: [MULTISIM.md](openwrt/MULTISIM.md).
-- **Installation/update:** the SD installer reserves `e5boot` (32 MiB) and a
-  Debian A/B pair of **4 GiB each**. It checks space before writing and reports
-  concrete errors. Debian and rooted Android can update the inactive Debian slot.
-- **Connection recovery:** info screen USB settings provide reset and one-click
-  diagnostics for USB/hotspot connection problems.
-- **Android → Linux:** install the [Magisk module](magisk/README.md), then use its
-  manual Action to enter the selected installed Linux system. Module safety
-  checks and Android root-shell activation are tested; its Magisk UI Action has
-  not been separately exercised.
+发布页提供完整 ZIP（含安装器、boot、OpenWrt 根文件系统、校验清单）。
+安装器只写非当前 Android 槽位，不改 GPT 时优先使用已有未分配空间；
+没有空间时必须由用户明确确认后才能处理加密 userdata 和两阶段安装。
 
-Flash bundles are in `out/openwrt/`; verified release files and checksums are in
-`out/release/`. Download a complete bundle from [Releases](https://github.com/Enceka/e5-linux/releases),
-unpack and follow its README. The generic image contains no recipient firmware
-or Android vendor runtime: the installer extracts them from that recipient's device.
+1. 备份重要数据，确认设备电量充足，整个过程保持供电。
+2. 解压完整发布包，运行根目录的 `OpenWrt-Installer.exe`（Windows）、
+   macOS 对应 App，或 Android 安装器。
+3. 首次安装按向导创建分区；已有 Linux 系统用“更新 OpenWrt”，
+   会保留 `/etc/config`、密码、SSH 密钥、流量记录、用户屏幕应用、NV、
+   音频 XML 与触控固件。
+4. 更新只允许同内核 release、同 OpenWrt 版本；跨版本先看发布说明。
+5. 更新后如需回 Android：Linux shell 执行 `e5-next-boot android` 后重启。
 
-The [release workflow](docs/RELEASE.md) builds and publishes the mainline OpenWrt
-bundle and Magisk ZIP. Compile time is UTC+8 to the second. It validates source
-files, matching kernel modules, image metadata and archive hashes. Debian release
-packaging remains a separate build path.
+详细边界、槽位同步和回滚证据见
+[正式安装接入](docs/CHANGXING60-INSTALL.zh-CN.md)、
+[安装与启动回归](docs/INSTALLER-FLOW-AUDIT-20261029.zh-CN.md)、
+[在线缩容实测](docs/CHANGXING60-ONLINE-SHRINK-20261029.zh-CN.md)。
 
-## Repository layout
+> 禁止使用 fastboot。所有刷写走已确认的 ADB/root、安装器或系统内更新通道；
+> 通道不可用时保留现场并排查，不换启动协议硬刷。
 
-| Path | Contents |
+默认管理地址：热点或 USB 网口 `192.168.9.1`，USB 主机固定 `.9.2`。
+首次使用请修改安装器/系统默认密码与热点口令。
+
+## 从源码开发
+
+### 依赖与环境
+
+- Linux 构建机（CI 使用 `ubuntu-24.04-arm`）：`clang lld llvm make bc bison flex
+  libssl-dev libelf-dev dwarves gcc-aarch64-linux-gnu cpio lz4 gcc libc6-dev python3`
+- 公开内核源码：`Enceka/linux-lts-e5`，默认提交
+  `020b970e351eee3887e6caaf2d653926e7086e44`
+- 安装器子模块固定为 `kanoqwq/openwrt-tools@57e159c`；
+  新检出必须 `--recurse-submodules`
+- 构建输入由 `devices/changxing60/ci-seeds/` 与
+  `tools/ci-base.lock.json` 锁定；不要用旧包或其它机型文件替代
+
+```sh
+git clone --recurse-submodules https://github.com/charli2014/e5-linux.git
+cd e5-linux
+```
+
+### 运行测试（不接触设备）
+
+```sh
+bash -n openwrt/build-rootfs.sh openwrt/device-install-image.sh \
+  openwrt/device-install-part.sh openwrt/device-stage-part-update.sh boot/part-update.sh
+python3 devices/test_power_state.py
+python3 devices/test_staging.py
+python3 devices/changxing60/test_screen_defaults.py
+python3 openwrt/tests/image-keep-config.py
+python3 openwrt/tests/update-device-files.py
+python3 tools/tests/ci-release.py
+python3 tools/tests/release-changes.py
+```
+
+屏幕原生组件、block-mount 等测试需要编译器/容器，CI 在组装前执行完整集合。
+
+### 编译内核
+
+```sh
+git clone https://github.com/Enceka/linux-lts-e5
+git -C linux-lts-e5 checkout 020b970e351eee3887e6caaf2d653926e7086e44
+python3 tools/ci-seeds.py --no-base
+python3 devices/changxing60/build-kernel.py \
+  --kernel "$PWD/linux-lts-e5" --build "$PWD/out/objects-changxing60" \
+  --base-config "$PWD/inputs/ums9620-base.config" \
+  --out "$PWD/out/kernel-changxing60" --jobs 4
+```
+
+构建器会执行板级准备与 `devices/common/power/` 的五个挂起补丁
+（顺序 0001→0002→0004→0005→0006），产出 Image、DTB 与完整模块配套。
+内核 release 固定为 `6.18.54-changxing60-bringup4`，重建不变号，
+以支持同版本系统内更新。
+
+### 组装发布包
+
+唯一正式入口是 `tools/build-release.py`：
+
+```sh
+python3 tools/build-release.py prepare-installers --workspace /path/to/openwrt-build
+sudo python3 tools/build-release.py package --workspace /path/to/openwrt-build \
+  --profiles changxing60
+```
+
+正式产物在 `out/releases/<task>/`，内含唯一 ZIP、`SHA256SUMS` 与
+`BUILD-RUN.json`。`.building-*` 是未完成现场，不能发布。
+本地固定工作区、缓存和安装器锁的规则见
+[本地构建规范](docs/LOCAL-BUILD.zh-CN.md) 与
+[Agent 构建手册](docs/AGENT-BUILD.zh-CN.md)；不要复制整份源码/rootfs
+或用旧缓存冒充新编译。
+
+### GitHub Actions
+
+工作流：`.github/workflows/changxing60-release.yml`（与上游 E5 的
+`release.yml` 独立）。
+
+- 手动：Actions → “Build and publish Changxing 60 OpenWrt” → Run workflow；
+  `kernel_ref` 默认登记提交，`publish` 默认开，`prerelease` 默认开。
+- 打标签：`git tag changxing60-v<日期> && git push origin changxing60-v<日期>`；
+  tag 即 Release 名。
+- 手动触发的 Release tag 取 zip 文件名（`r<时间>-g<提交>-s<指纹>`）。
+  同一 tag 已发布时拒绝覆盖，需换新 tag。
+- `publish` 只在构建、测试和哈希校验通过后创建/发布草稿；
+  失败时下载 `cx60-diagnostics-*` 构件排查。
+
+CI 输入是自足的：小件种子在仓库内，clean base 由锁定 Release 分片校验，
+补丁 APK 每次用仓库脚本现编。细节见
+[CI 编译与发布](docs/CI-CHANGXING60.zh-CN.md)。
+
+## 省电待机
+
+状态机在 `openwrt/overlay/usr/libexec/e5-power-state`，策略文件
+`/etc/e5-power.json`，运行状态 `/run/e5-power.json`：
+
+```json
+{"idle_min": 30, "deep_min": 0, "hold_awake_min": 5, "inhibit": false}
+```
+
+- **ONLINE**：热点、5G、USB 管理口正常，网速不受影响。
+- **IDLE**：无 Wi-Fi 客户端、无 USB 数据口且背光关闭达到 `idle_min` 后，
+  经 `data-sim` 属主逐卡关射频，停蓝牙与 SIM 轮询，**保留热点**；
+  手机重新关联即可唤醒并恢复。关射频前保存恢复标记，避免 IDLE 期间重启
+  后以射频关闭状态开机。
+- **DEEP**：在 IDLE 基础上再等 `deep_min`，关热点并写 `mem` 挂起。
+  出厂 `deep_min=0`（禁用），因为畅行60 真机挂起尚未完成受控验收。
+  音频播放、SIPA 内核唤醒锁、升级锁、USB 数据口会阻止 DEEP。
+- 短待机被唤醒会翻倍下次计时（封顶 4 倍）；升级或 `inhibit` 立即唤醒；
+  守护进程收到 SIGTERM 先恢复射频再退出，强杀也有开机标记兜底。
+
+管理界面：LuCI `admin/modem/power` 与屏幕电源插件共用 `e5-power` rpcd 后端。
+`/etc/e5-power.json` 在系统更新时保留。
+
+### 本次新增：dwc3 运行时挂起
+
+实测本机 USB3 控制器在 gadget `not attached` 时仍 `power/control=on`
+（约 1.26e6 ms active、0 ms suspended），而父 glue 已是 `auto`。
+`devices/changxing60/stage.py` 写入 `/etc/e5/usb-autosuspend`（内容 `dwc3`），
+`e5-power-state` 启动时只把 UDC 自己的 `power/control` 改为 `auto`，
+不碰承载 5G 数据路径的父 glue；其它机型没有该标记，不受影响。
+
+尚未实测：插数据线能否从 runtime suspend 正常唤醒并重新枚举。
+若 USB 串口控制台异常，删除 `/etc/e5/usb-autosuspend` 或把
+`/sys/class/udc/*/power/control` 写回 `on` 即可对照；Wi-Fi/LuCI/SSH
+始终是另一条管理通道。
+
+### 实测审计与禁区
+
+省电审计（5G SA 与高速 Wi-Fi 不改）的数据、可行项和不建议项见
+[省电审计 2026-11-22](docs/POWER-AUDIT-20261122.zh-CN.md)。
+
+> **不要在畅行60 上读 `/sys/kernel/debug/clk/clk_summary`。**
+> 本机实测该读取在 `sprd_gate_is_enabled()` 触发 SError，随后内核 panic。
+> 需要时钟信息时用构建产物、DT 和驱动代码交叉核对，不做跨电源域裸遍历。
+
+## 仓库结构
+
+| 路径 | 内容 |
 |---|---|
-| `kernel/` | `build-linux.sh`, `e5-linux.fragment` (Linux additions on top of the device defconfig), `patches/0001-0028` (applied by `build-linux.sh`) |
-| `boot/` | `init` (initramfs), `build-boot-image.py`, `stage-modules.sh` + `module-order.{stock,extra}`, `flash-trial.sh` / `android-boot-linux.sh` (from Android), `flash-from-linux.sh` (from a running e5-linux) |
-| `rootfs/` | `build-rootfs-container.sh` (+ `rootfs-in-container.sh`, the build in a Debian arm64 container), `install-rootfs.sh`, `packages.list`, `configure-rootfs.sh`, `fetch-debian-rootfs.py`, `install-packages.sh`, `pull-wcn-firmware.sh` / `pull-audio-firmware.sh` / `extract-android-vendor.sh` (blobs from your device), `stage-unisoc-cpd.sh`, `overlay/`; the `device-*.sh` and `build-rootfs.sh`/`e5-chroot.sh` paths are the older on-device and qemu builds |
-| `openwrt/` | OpenWrt next to Debian: `build-modemmanager.sh`, `build-rootfs.sh`, `install.sh` (+ `device-install.sh`), `overlay/`, `patches/`, its own README |
-| `tools/` | `collect-logs.sh`, `e5-telnet.py`, `e5-serial.py`, screenshot/key/touch helpers |
-| `docs/` | `FINDINGS.md` (measurements, dead ends), `STATUS.md` (the work list) |
+| `devices/changxing60/` | 板级 profile、内核准备、充电/音频/触摸适配、CI 种子、离线测试 |
+| `devices/common/` | 多机型共享：屏幕、电源状态机、挂起补丁、UFS、网络与 USB 工具 |
+| `devices/common/power/` | 五个系统挂起补丁及逐条说明 |
+| `openwrt/overlay/` | 设备端根文件系统覆盖层（init 脚本、`e5-power-state`、LuCI/rpcd） |
+| `openwrt/build-rootfs.sh` | OpenWrt 根文件系统组装 |
+| `tools/` | 发布入口、CI 输入校验、发布说明生成、UFS 身份助手、测试 |
+| `.github/workflows/changxing60-release.yml` | 内核编译 → 安装包组装 → 测试 → Release |
+| `installer/` | 公共安装器子模块（`kanoqwq/openwrt-tools`，固定提交） |
+| `boot/`、`rootfs/`、`kernel/` | 上游 E5 家族的启动、根文件系统与内核构建资料 |
+| `docs/` | 按主题与日期组织的证据、设计与操作文档 |
+| `work/`、`dumps/` | 本机取证/备份目录，默认忽略，不入库 |
 
-**Not included**: stock firmware, Android vendor binaries, device dumps. The
-scripts read those from *your* device.
+## 文档导航
 
-## Requirements
+完整索引见 [docs/README.zh-CN.md](docs/README.zh-CN.md)。建议顺序：
 
-* A Rongyue E5 with an unlocked bootloader (`ro.boot.verifiedbootstate=orange`),
-  rooted Android with working `adb` + `su`, and a way to recover (SPD download
-  mode or a known-good stock image).
-* Linux build host with `clang`/`lld` (LLVM), `make`, `python3`, `lz4`.  On macOS
-  that means brew's `make` (the system one is GNU Make 3.81, kbuild wants ≥ 3.82),
-  `coreutils` + `gnu-sed` for kbuild's scripts, `llvm` for `llvm-objdump`/`llvm-nm`/
-  `llvm-objcopy`, and a directory with `elf.h` for `scripts/mod` (`work/hostinc/`
-  in this tree).
-* Optional: a Rust toolchain with the `aarch64-unknown-linux-musl` target, only to
-  rebuild `unisoc-cpd` (the overlay already carries a static binary).
-* Docker, for the root filesystem: `rootfs/build-rootfs-container.sh` runs the
-  install inside `debian:trixie` on arm64, where the packages install at native
-  speed.  `rootfs/e5-chroot.sh` is the unprivileged qemu path for a Linux host and
-  cannot run on macOS.
-* Dumps you make yourself: a stock slot-b boot image and the first 4 KiB of
-  `misc` (see below).
-* For the modem, the Android vendor subset (`rootfs/extract-android-vendor.sh`
-  pulls it off the device, ~49 MiB): without it `e5-vendor.service` is skipped and
-  there is no CP, no `/dev/stty_nr1` and no baseband.  It is proprietary, so it is
-  never in the image and has to be pushed into `/opt/e5/android/` separately.
+1. 新接手：本文件 → [安装接入](docs/CHANGXING60-INSTALL.zh-CN.md) →
+   [CI 编译与发布](docs/CI-CHANGXING60.zh-CN.md)
+2. 电源： [待机策略](docs/POWER-STANDBY-20261117.zh-CN.md) →
+   [挂起补丁栈](docs/SUSPEND-PATCHES-20261121.zh-CN.md) →
+   [省电审计](docs/POWER-AUDIT-20261122.zh-CN.md)
+3. 存储： [UFS 适配指南](docs/UFS-PORTING.zh-CN.md)（改 UFS 前必读）
+4. 构建： [本地构建规范](docs/LOCAL-BUILD.zh-CN.md) →
+   [Agent 构建手册](docs/AGENT-BUILD.zh-CN.md)
+5. 原厂行为与新机型： [原厂适配检查表](docs/NEW-DEVICE-STOCK-ADAPTATION.zh-CN.md)、
+   [原厂充电/通话/Wi-Fi 证据](docs/STOCK-CHARGE-CALL-WIFI-20261016.zh-CN.md)
 
-## Build and run
+日期命名的文档是当时的取证台账，结论可能后来被修正；当前状态以本文件、
+各主题最新文档和 git 历史为准。
 
-### 0. Dumps
+## 发布流程与变更说明
 
-```sh
-mkdir -p dumps
-adb shell 'su -c "dd if=/dev/block/by-name/boot_b of=/data/local/tmp/boot_b.img"'
-adb pull /data/local/tmp/boot_b.img dumps/boot_b.img
-adb shell 'su -c "dd if=/dev/block/by-name/misc of=/data/local/tmp/misc.bin bs=4096 count=1"'
-adb pull /data/local/tmp/misc.bin dumps/misc-head.bin
-```
+- 每次发布前在 [CHANGELOG.md](CHANGELOG.md) 的“未发布”一节写清楚：
+  改了什么、为什么、已验证/未验证边界、回滚方式。
+- 构建时 `tools/release-changes.py` 会把该节与“上一发布 tag 以来”的
+  git 提交记录合成为 Release 的“本次发布改了什么”，再附源码提交、
+  内核 release、引导包与 clean base 的 SHA-256。
+- 没有上一发布标签时会明确写出“无法自动对比”，不伪造差异。
+- 发布为草稿 → 校验资产哈希 → 上传 → 正式发布；已发布 tag 不覆盖。
 
-### 1. Kernel
+## 开发约定
 
-```sh
-git clone -b linux-staging https://github.com/Enceka/kernel_sprd_ums9158   # inside this checkout
-kernel/build-linux.sh
-```
+- `AGENTS.md` 是协作规则的权威版本，提交前先读。要点：
+  - NR0/AT 通道只有一个属主；不要在其它服务里抢 URC。
+  - 改 UFS 前先读 `docs/UFS-PORTING.zh-CN.md`；单位、GPT、身份与加密
+    边界不能用“看起来能读”代替验收。
+  - 原厂固件/驱动是参照，不以另一机型的 GPL 代码推断本机事实。
+  - 每个结论区分“原厂证据 / 源码 / 编译 / 只读启动 / 完整系统 / 长期验收”。
+  - `tools/build-release.py` 是唯一发布入口；安装器子模块由上游维护，
+    本仓库只更新 gitlink 与版本锁。
+  - 不自动删除缓存、dump、备份或历史发布；不创建项目外目录。
+- 新增板级动作优先放进 `devices/changxing60/stage.py` 或板级准备脚本，
+  共享层只放经过多机型验证的能力。
+- 设备端测试先装试验版，用户确认后再提交；提交信息说明验证范围。
 
-`linux-staging` is the branch with the e5-linux changes committed on top of the
-device tree (`main` is the vendor tree as published).  `KERNEL_TREE` defaults to
-`./kernel_sprd_ums9158` and `O` to `./out_linux`.  The script then checks
-`kernel/patches/*.patch` against the tree -- on `linux-staging` every one reports
-"already applied"; on a tree without them it applies them -- freezes the release string in `.scmversion` so a patched tree does not
-become `-dirty`, merges `kernel/e5-linux.fragment` into
-`arch/arm64/configs/e5_rongyue_defconfig`, fails loudly if a symbol the initramfs
-depends on did not survive, and builds `Image` + modules + DTBs.
+## 已知限制
 
-### 2. Modules and initramfs
+- 正式安装/更新/重装/卸载的全部硬件组合未验收；`profile.json` 仍保留
+  `installation_hardware_verified: false`。
+- 深睡默认关闭；挂起补丁的畅行60 真机收益与唤醒时延未测。
+- dwc3 自动挂起后的数据线热插拔/串口控制台未实测。
+- 蓝牙配对/音频、通话麦克风、最高音量、长期续航、外接充电器与
+  OTG/扩展坞组合仍有未验收项。
+- 内核供体是公开的 UMS9620 基线，不是本机原厂 5.4 源码；行为差异按
+  “原厂证据优先”逐项核对。
+- 读取 `clk_summary` 会 panic（见上文），不要用于功耗排查。
 
-```sh
-boot/stage-modules.sh          # -> out_modules/, boot/module-order.txt
-```
+## 许可与致谢
 
-The initramfs `insmod`s those modules in the **stock first-stage order**, not
-alphabetically; see `docs/FINDINGS.md` §3 for why that is not a nitpick.
+- 内核：公开 `Enceka/linux-lts-e5`（GPL-2.0）；挂起补丁参考
+  `CharlesGool/e5-sleep-kernel`（GPL-2.0）。
+- 仓库脚本与文档：MIT，见 [LICENSE](LICENSE)。
+- 安装器：[kanoqwq/openwrt-tools](https://github.com/kanoqwq/openwrt-tools)，
+  本仓库以子模块固定提交引用。
+- 上游机型与移植方法：[sprd-linux-devs/e5-linux](https://github.com/sprd-linux-devs/e5-linux)。
+- 原厂固件、Android vendor 组件与 bootloader 归各自权利人所有，
+  不在本仓库分发。
 
-A static arm64 busybox is needed for the initramfs:
-
-```sh
-mkdir -p work/busybox/ext && cd work/busybox
-curl -O http://ports.ubuntu.com/ubuntu-ports/pool/main/b/busybox/busybox-static_1.36.1-6ubuntu3.1_arm64.deb
-ar x busybox-static_*.deb && tar --zstd -xf data.tar.zst -C ext ./usr/bin/busybox
-cd -    # -> work/busybox/ext/usr/bin/busybox
-```
-
-### 2a. Firmware and blobs from your device
-
-The overlay's `lib/firmware/` carries only the regulatory database; the WCN
-(Wi-Fi/BT) firmware, the AGDSP image and the audio parameters are vendor blobs and
-are pulled off *your* device, with it in Android (adb + su):
-
-```sh
-rootfs/pull-wcn-firmware.sh      # wcnmodem.bin, gnssmodem.bin, wifi_board_config*.ini, MACs
-rootfs/pull-audio-firmware.sh    # l_agdsp_a.img, audio_structure, dsp_vbc, cvs, aw87xxx_acf.bin
-rootfs/extract-android-vendor.sh # -> work/android-subset/ (modem_control and its runtime)
-```
-
-The first two land in `rootfs/overlay/` and travel inside the boot image; the
-vendor subset is installed on the root filesystem separately (step 3).
-
-### 2b. unisoc-cpd (optional)
-
-The overlay carries a built `unisoc-cpd` (`usr/local/bin/`, `etc/unisoc-cpd/`, the
-units).  To update it from a checkout of its own repository:
-
-```sh
-git clone https://github.com/Enceka/unisoc-cpd
-rootfs/stage-unisoc-cpd.sh       # builds, copies, applies the Linux-side edits
-```
-
-The script is the only way that copy should change: it turns off the profile's
-Android-only NAT, binds the web page to the LAN (`192.168.9.1`, reachable from the USB port only) and records the commit in
-`etc/unisoc-cpd/VERSION`.
-
-### 3. Root filesystem (fresh install)
-
-The rootfs is a loop file inside Android's `/data`, not a partition, so it is built
-once, pushed, and does not have to be rebuilt when the boot image changes:
-
-```sh
-rootfs/build-rootfs-container.sh            # all stages -> out/rootfs.ext4 (8 GiB)
-rootfs/install-rootfs.sh out/rootfs.ext4    # push in 1 GiB chunks, verify, publish
-```
-
-`build-rootfs-container.sh` installs `rootfs/packages.list` (phosh -- the only session
-since 2026-09-19, Plasma Mobile and its X11 are no longer in the list --,
-NetworkManager/`wpasupplicant` for Wi-Fi and the hotspot, `nftables` for NAT, pipewire, ...)
-into a Debian trixie arm64 tree, copies `rootfs/overlay/` over it, stages the audio
-modules from `out_linux/` (so build the kernel first), creates the `e5` user, enables
-the units and packs the result.  The image is **8 GiB by default**
-(`E5_IMG_MIB=N` overrides it): the loop file is the only writable filesystem on the
-device, and one packed to exactly its own size leaves no room for the first
-`apt install`.
-
-Stages can be re-run on their own, which is what a later overlay or package change
-actually needs:
-
-```sh
-rootfs/build-rootfs-container.sh configure pack           # overlay change only
-rootfs/build-rootfs-container.sh install configure pack   # package set changed
-```
-
-`install-rootfs.sh` runs against rooted Android (`adb` + `su`): it removes the
-previous `/data/e5linux/rootfs.ext4` to make room, pushes the new image in chunks,
-compares the sha256 on the device and renames it into place.  The accounts it
-creates are `e5`/`123456` and `root`/`root` (autologin is on, so the touchscreen
-session never asks).
-
-The modem is the one piece that is **not** in the image.  The Android vendor subset
-is proprietary and is neither committed nor packed; install it once the system is up
-(it survives, the loop file is writable).  Userdata is not mounted under Linux, so it
-goes over the USB LAN:
-
-```sh
-tar -C work -cf work/android-subset.tar android-subset
-( cd work && python3 -m http.server 8000 --bind 192.168.9.2 )   # the USB host's fixed address
-# in the e5-linux shell (telnet 192.168.9.1, or the USB serial console), as root:
-cd /tmp && /usr/local/bin/busybox wget http://192.168.9.2:8000/android-subset.tar
-mkdir -p /opt/e5 && tar --no-same-owner -xf android-subset.tar -C /opt/e5
-mv /opt/e5/android-subset /opt/e5/android && systemctl start e5-vendor e5-sipc-wwan ModemManager
-```
-
-`--no-same-owner` matters: bionic refuses a `__properties__` tree that is not
-root-owned.  Do not "fix" ownership later with `chown -R` while `e5-vendor` runs --
-the chroot has `/dev`, `/proc` and `/sys` bind-mounted, and the recursion rewrites
-the live device nodes (FINDINGS §28).  Until the subset is there `e5-vendor.service`
-is skipped (`ConditionPathExists=`), `/dev/stty_nr1` returns `ENODEV` and
-ModemManager finds no modem.
-
-### 4. Boot image
-
-```sh
-boot/build-boot-image.py \
-  --stock-boot dumps/boot_b.img --misc-head dumps/misc-head.bin \
-  --kernel out_linux/arch/arm64/boot/Image --modules out_modules \
-  --busybox work/busybox/ext/usr/bin/busybox --overlay rootfs/overlay \
-  --out boot-linux-slotb.img
-```
-
-It writes `boot-linux-slotb.img`, a `.json` manifest and a
-`.misc-slot-b-trial.bin` slot-arming block.
-
-**`--overlay` is not optional.**  Without it the initramfs carries no
-`e5-overlay/` at all: no `wcnmodem.bin`, no systemd units, no `/etc/environment` --
-the device boots, but as a bare system with no Wi-Fi firmware and no services.
-And since `boot/init` copies the overlay over the root filesystem on every boot, the
-image's copy wins over anything edited on the device by hand (except `/var/lib`,
-which is only seeded) -- change `rootfs/overlay/` and rebuild instead.
-The builder packs the overlay with `a+r` (and `a+rx` for executables) rather than
-whatever mode the checkout happens to have; a 0600 `phoc.ini` from a build host
-with a strict umask once cost the `e5` user its entire session.
-
-### 5. Flash
-
-The first time, from rooted Android:
-
-```sh
-boot/flash-trial.sh boot-linux-slotb.img
-```
-
-Writes **only** `boot_b` and the 32-byte `bootloader_control` in `misc`;
-`boot_a`, `init_boot_*`, `vendor_boot_*`, the GPT and `userdata` are never
-touched. The script verifies the image hash locally, on the device, and on the
-partition before it arms the slot, and refuses to run if the live `misc` block
-is not the expected slot-a state.
-
-With no root filesystem installed yet, the device comes up as a standalone Linux:
-telnet `192.168.77.1` (or the USB CDC-ACM console) — and reboots back to Android
-after ten minutes (the safety timer, which a real session stops), or if the kernel
-panics. To boot the Linux image already in
-`boot_b` again from Android without reflashing:
-
-```sh
-boot/android-boot-linux.sh boot-linux-slotb.img
-```
-
-Every later image can be flashed from the running e5-linux over the USB LAN,
-with no Android round trip: it serves the image over HTTP, writes and verifies
-`boot_b`, arms slot b and reboots.
-
-```sh
-boot/flash-from-linux.sh boot-linux-slotb.img
-```
-
-### 6. Using it
-
-| | |
-|---|---|
-| LAN | `br0` = the USB port (NCM) + the hotspot, the device is `192.168.9.1`; the USB host always gets `192.168.9.2` and no default route, hotspot clients get `.10`-`.200`; everyone gets a public IPv6 address from the bearer's /64 |
-| shell | `telnet 192.168.9.1` (`root`/`root`, USB port only), or the USB CDC-ACM serial console |
-| accounts | `e5`/`123456` (the phosh session autologins), `root`/`root` |
-| hotspot | SSID `E5-Linux`, WPA2 `12345678`, clients on 192.168.9.0/24 |
-| modem | ModemManager: Phosh's mobile settings, Calls, Chatty, `mmcli -m any`; data is NetworkManager's `Mobile` connection (`nmcli c up/down Mobile`); raw AT with `e5-at 'AT+CSQ'` |
-| UFI-TOOLS | `http://192.168.9.1:2333` (USB port only), `admin`; CLI `ufi-tools status`, `ufi-tools set-token` |
-| back to Android | `e5-next-boot android && systemctl reboot` |
-
-Change the passwords, the hotspot passphrase and the UFI-TOOLS token before the
-device leaves your desk.  Telnet, gotty and UFI-TOOLS are dropped for
-frames arriving from the Wi-Fi side of the bridge and for anything from the uplink
-(`etc/e5/nat.nft`), so a hotspot client or the internet cannot reach them -- the USB
-cable is the management port.
-
-### 7. Read the result
-
-```sh
-tools/collect-logs.sh logs
-```
-
-After a boot that fell back to Android, this pulls `/sys/fs/pstore/*`, the 4 MiB
-persistent log inside `boot_b` and the bootloader log. `E5-LINUX: stage=…` lines in the pstore console are the
-initramfs reporting progress.
-
-## Credits and licenses
-
-* Kernel source: Google android13-5.15 GKI and the Unisoc UMS9621 platform, as
-  published in `Enceka/kernel_sprd_ums9158` — GPL-2.0.
-* The approach, repository layout and several scripts are derived from
-  [`dikeckaan/mu300-linux`](https://github.com/dikeckaan/mu300-linux) (MIT).
-* Scripts, tools and documentation in this repository: MIT (see `LICENSE`).
-* Stock firmware, Android vendor components and bootloaders belong to their
-  owners and are not distributed here.
-
-### Return from Android with Magisk
-
-The [E5 Linux switch module](magisk/README.md) adds a manual **Action** in Magisk
-to boot the Linux system already installed on SD or in an image. It preserves
-the SD multiboot selection and validates live boot control before arming slot B.
-Installing the module does not switch systems. Build it with `bash magisk/build.sh`;
-release workflows include the module ZIP and checksum.
+旧链接 [README.zh-CN.md](README.zh-CN.md) 保留为指向本文件的说明，避免两份内容分叉。

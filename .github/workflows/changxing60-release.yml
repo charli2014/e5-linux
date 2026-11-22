@@ -138,6 +138,7 @@ jobs:
           python3 openwrt/tests/image-keep-config.py
           python3 openwrt/tests/update-device-files.py
           python3 tools/tests/ci-release.py
+          python3 tools/tests/release-changes.py
       - name: Restore patched OpenWrt packages
         id: packages
         uses: actions/cache/restore@v4
@@ -247,10 +248,13 @@ jobs:
           zip=$(find "$dir" -maxdepth 1 -name '*.zip' | head -1)
           stem=$(basename "$zip" .zip)
           (cd "$dir" && sha256sum ./*.zip > SHA256SUMS)
-          python3 - "$dir" "$stem" <<'EOF'
+          if [ "$GITHUB_EVENT_NAME" = push ]; then tag="$GITHUB_REF_NAME"; else tag="$stem"; fi
+          python3 tools/release-changes.py > "$RUNNER_TEMP/changes.md"
+          python3 - "$dir" "$stem" "$RUNNER_TEMP/changes.md" <<'EOF'
           import json, os, sys
           from pathlib import Path
           directory, stem = Path(sys.argv[1]), sys.argv[2]
+          changes = Path(sys.argv[3]).read_text(encoding='utf-8')
           run = json.loads((directory / 'BUILD-RUN.json').read_text())
           source = run['source']
           base_lock = json.loads(Path('tools/ci-base.lock.json').read_text(encoding='utf-8'))
@@ -258,6 +262,8 @@ jobs:
               f"# {stem}", '',
               'Changxing 60 (ZTE 7552N / P720S20, UMS9620) OpenWrt 25.12.5 installer package.',
               '畅行60 OpenWrt 25.12.5 安装包（含分级省电待机；深睡出厂禁用，需受控试验后启用）。', '',
+              changes,
+              '### 构建信息', '',
               f"- Source commit: `{source['source_commit']}` (dirty: {source['source_dirty']})",
               f"- Kernel release: `6.18.54-changxing60-bringup4`",
               f"- Bootstrap inputs SHA-256: `{os.environ['BOOTSTRAP_SHA256']}`",
@@ -269,7 +275,6 @@ jobs:
           ]
           (directory / 'release-notes.md').write_text('\n'.join(notes) + '\n', encoding='utf-8')
           EOF
-          if [ "$GITHUB_EVENT_NAME" = push ]; then tag="$GITHUB_REF_NAME"; else tag="$stem"; fi
           {
             echo "tag=$tag"
             echo "title=Changxing 60 OpenWrt $E5_WRT_VER · $stem"

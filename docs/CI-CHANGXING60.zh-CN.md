@@ -75,6 +75,21 @@ Release 资产：`changxing60-*.zip`（安装包，含 Windows/macOS/Android 安
 包内省电待机为 IDLE 30 分钟、DEEP 出厂禁用（`deep_min=0`），
 与台账 `docs/POWER-STANDBY-20261117.zh-CN.md` 一致。
 
+## 发布说明：每次写明改了什么
+
+Release 正文不再只有固定模板。Collect 步执行
+`tools/release-changes.py`，把两部分合成“本次发布改了什么”：
+
+1. `CHANGELOG.md` 的“未发布”一节（人工摘要：改了什么、为什么、
+   已验证/未验证边界、回滚方式）；
+2. `git log` 中“上一 `changxing60-*` 标签以来”的提交记录（最多 60 条）
+   和提交数。没有上一标签时明确写“无法自动对比上一发布”，不伪造差异。
+
+生成结果写入发布目录的 `release-notes.md`，随后由 publish job 作为 Release
+正文；后面的“构建信息”仍保留源码提交、内核 release、引导包与 clean base
+的 SHA-256。发布前必须先把本次改动写进 `CHANGELOG.md`，否则 Release 只有
+提交标题，没有人工结论。测试入口：`python3 tools/tests/release-changes.py`。
+
 ## 已知约束
 
 1. **种子与 base 锁按基线固定。** 补丁 APK 由 CI 现编，源码改动自动重编，

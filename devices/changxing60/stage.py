@@ -80,6 +80,9 @@ def stage_power(root):
     config = root / 'etc/e5-power.json'
     if not config.exists():
         config.write_text(json.dumps(defaults, separators=(',', ':')) + '\n')
+    # Measured on this board: dwc3 stays active (0 ms suspended) while the
+    # gadget is 'not attached'. Other boards keep the daemon's default.
+    (root / 'etc/e5/usb-autosuspend').write_text('dwc3\n')
 
 
 def stage(root):

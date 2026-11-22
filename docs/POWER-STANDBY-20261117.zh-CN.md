@@ -339,3 +339,26 @@ uci get 两个选项均 Entry not found。全新刷机不受影响。
 
 因此上文"第 1 步先看门狗、挂起会触发重启"的历史描述只适用于旧包；
 新包请按新文档执行，仍须有人在场。
+
+## 2026-11-22 USB3/dwc3 运行时挂起（仅畅行60）
+
+真机只读核查：dwc3 在 gadget `not attached` 时仍 `power/control=on`，
+active_time 1,257,855 ms、suspended 0；父 glue `25100000.usb3` 已是
+`auto` 且 active。受控写入 UDC 自己的 `power/control=auto` 后进入
+`suspended`，恢复 `on` 后累计 29,804 ms 挂起；父 glue 未动。
+
+实现：
+
+- `devices/changxing60/stage.py` 写 `/etc/e5/usb-autosuspend`（内容 `dwc3`），
+  只在本机型镜像存在；其它机型不受影响。
+- `e5-power-state` 的 `Ops.usb_runtime_pm()` 在启动时只遍历
+  `sys/class/udc/*/power/control`，把 `on` 改 `auto`，不碰父 glue；
+  UDC 不存在或标记缺失时静默跳过，失败只记日志。
+- `devices/test_power_state.py` 增加 4 项：标记生效、其它板标记忽略、
+  UDC 缺失不报错、无标记不写。
+
+**未验证**：插数据线能否从 runtime suspend 唤醒并重新枚举，USB 串口
+控制台是否受影响。若异常，删除 `/etc/e5/usb-autosuspend` 或把对应
+`power/control` 写回 `on` 即可复现对照；Wi-Fi/LuCI/SSH 仍是管理通道。
+估算收益 3–10 mA，未做整机 A/B。审计数据与禁区见
+[省电审计](POWER-AUDIT-20261122.zh-CN.md)。

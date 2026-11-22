@@ -67,6 +67,10 @@ class FakeOps:
     def wakelocks(self):
         return list(self.locks)
 
+    def usb_runtime_pm(self):
+        self.calls.append(('usb_pm',))
+        return None
+
     def suspend(self, test):
         self.calls.append(('suspend', test))
         return self.suspend_error
@@ -119,7 +123,11 @@ class PowerTest(unittest.TestCase):
         self.machine = self.make_machine()
         self.advance(86400)
         self.assertEqual(self.machine.state, 'ONLINE')
-        self.assertEqual(self.ops.calls, [])
+        self.assertEqual([c for c in self.ops.calls
+                          if c[0] in ('radio', 'service', 'wifi', 'suspend')], [])
+
+    def test_usb_runtime_pm_applied_at_boot(self):
+        self.assertIn(('usb_pm',), self.ops.calls)
 
     def test_idle_after_timeout(self):
         self.reach_idle()
@@ -441,6 +449,44 @@ class WakelockReadTest(unittest.TestCase):
         (self.root / 'sys/power/wake_lock').unlink()
         self.write_sources('')
         self.assertIn('unknown', self.ops.wakelocks())
+
+
+class UsbRuntimePmTest(unittest.TestCase):
+    """Ops.usb_runtime_pm against a fake UDC tree; glue must stay untouched."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.udc = self.root / 'sys/class/udc/25100000.dwc3'
+        (self.udc / 'power').mkdir(parents=True)
+        (self.udc / 'power/control').write_text('on\n')
+        self.glue = self.root / 'sys/devices/platform/soc/soc:ipa-apb/25100000.usb3/power'
+        self.glue.mkdir(parents=True)
+        (self.glue / 'control').write_text('auto\n')
+        self.marker = self.root / 'etc/e5/usb-autosuspend'
+        self.marker.parent.mkdir(parents=True)
+        self.ops = Ops(self.root)
+
+    def test_applies_auto_to_the_udc_only(self):
+        self.marker.write_text('dwc3\n')
+        self.assertIsNone(self.ops.usb_runtime_pm())
+        self.assertEqual((self.udc / 'power/control').read_text(), 'auto\n')
+        self.assertEqual((self.glue / 'control').read_text(), 'auto\n')
+
+    def test_other_board_marker_is_ignored(self):
+        self.marker.write_text('e5\n')
+        self.assertIsNone(self.ops.usb_runtime_pm())
+        self.assertEqual((self.udc / 'power/control').read_text(), 'on\n')
+
+    def test_missing_udc_is_not_an_error(self):
+        self.marker.write_text('dwc3\n')
+        (self.udc / 'power/control').unlink()
+        self.assertIsNone(self.ops.usb_runtime_pm())
+
+    def test_unreadable_marker_is_not_an_error(self):
+        self.assertIsNone(self.ops.usb_runtime_pm())
+        self.assertEqual((self.udc / 'power/control').read_text(), 'on\n')
 
 
 if __name__ == '__main__':

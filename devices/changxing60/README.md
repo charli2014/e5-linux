@@ -296,3 +296,14 @@ SDP/CDP/未知电源及手动主机受电不强制提升到2.5 A；其他机型�
 热部署#38及235个配套模块通过校验，停充/恢复、网络和时间交接实测通过。
 历史错误100%仍需真实校正端点恢复，完整电池精度未验收。
 详见[后续调查与边界](../../docs/BATTERY-NATIVE-CHECKPOINT-20261031.zh-CN.md)。
+
+## 2026-11-22 省电审计与 dwc3 自动挂起
+
+按“5G SA 与高速 Wi-Fi 不改”的前提做了内核/驱动审计：ONLINE 主体仍是
+热点和 5G；确认 dwc3 在 UDC `not attached` 时仍常亮（active 1,257,855 ms、
+suspended 0），写 `auto` 可挂起，恢复后累计 29,804 ms。已只对本机型
+启用 UDC 自己的运行时挂起（`/etc/e5/usb-autosuspend`），不碰 USB3 父 glue。
+VBC/AGDSP 与 UFS 仍是确定的活动域，但没有安全的代码路径，暂只记录。
+数据、可行/不建议清单、验证顺序，以及 `clk_summary` 读取导致 SError panic
+的现场，见[省电审计](../../docs/POWER-AUDIT-20261122.zh-CN.md)和
+[待机台账](../../docs/POWER-STANDBY-20261117.zh-CN.md)的 2026-11-22 节。

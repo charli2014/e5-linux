@@ -201,6 +201,41 @@ class Ops:
                 names.append(fields[0])
         return names
 
+    def usb_runtime_pm(self):
+        """Let the UDC's core runtime-suspend when the board asks for it.
+
+        The dwc3 core boots with power/control=on and keeps the controller
+        active even while the gadget is 'not attached' (measured 1.26e6 ms
+        active, 0 ms suspended). 'auto' lets it suspend between transfers; an
+        attached host keeps it active. Only the controller's own node is
+        written, never the usb3 glue that carries the 5G data path.
+        """
+        marker = self.root / 'etc/e5/usb-autosuspend'
+        try:
+            if marker.read_text().strip() != 'dwc3':
+                return None
+        except OSError:
+            return None
+        try:
+            entries = list((self.root / 'sys/class/udc').iterdir())
+        except OSError:
+            return None
+        seen = set()
+        try:
+            for udc in entries:
+                control = udc / 'power/control'
+                if not control.is_file():
+                    continue
+                path = control.resolve()
+                if path in seen:
+                    continue
+                seen.add(path)
+                if path.read_text().strip() == 'on':
+                    path.write_text('auto\n')
+        except OSError as error:
+            return str(error)
+        return None
+
     def suspend(self, test):
         try:
             if test:
@@ -283,6 +318,9 @@ class Machine:
             if errors:
                 self.last_error = '; '.join(errors)
             self.ops.log('restored radio policy saved before sleep')
+        error = self.ops.usb_runtime_pm()
+        if error:
+            self.ops.log('USB runtime PM not applied: ' + error)
         self.hold_until = self.clock() + self.config['hold_awake_min'] * 60
 
     def activity(self):
