@@ -75,5 +75,18 @@ class SimsTest(unittest.TestCase):
         self.override['+CESQ']='+CESQ: 99,99,255,255,255,255,255,255,255\nOK'
         row=sims.collect(1,self.read)
         self.assertIsNone(row['signal']['rsrp']);self.assertEqual(row['registration'],'unknown')
+    def test_snapshot_stamp_uses_uptime_clock(self):
+        # Screen and dashboard age snapshots against /proc/uptime, which counts
+        # suspend time; CLOCK_MONOTONIC would look stale after every resume.
+        class Skewed:
+            CLOCK_BOOTTIME=7
+            @staticmethod
+            def clock_gettime(_):return 1670.5
+            @staticmethod
+            def monotonic():return 0.0
+        original=sims.time;sims.time=Skewed
+        try:row=sims.collect(0,self.read)
+        finally:sims.time=original
+        self.assertEqual(row['updated'],1670.5)
 
 if __name__=='__main__':unittest.main()

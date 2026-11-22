@@ -11,7 +11,9 @@ try:
         if slot not in ('0', '1'): raise ValueError('Invalid SIM slot')
         import time
         row=json.loads(Path('/run/t551m-sims.json').read_text())['sims'][int(slot)]
-        if time.monotonic()-row['updated'] > 15 or row.get('error'): raise ValueError('Stale SIM status')
+        # The collector stamps snapshots on CLOCK_BOOTTIME (/proc/uptime).
+        age=time.clock_gettime(time.CLOCK_BOOTTIME)-row['updated']
+        if not 0 <= age <= 15 or row.get('error'): raise ValueError('Stale SIM status')
         print(json.dumps(dict(stat=row.get('reg'), tac=None, cid=None, act=row.get('act')),separators=(',',':')))
         raise SystemExit(0)
     result = subprocess.run(['mmcli', '-J', '-m', 'any', '--timeout=3'],

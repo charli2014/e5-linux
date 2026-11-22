@@ -61,6 +61,8 @@ class Runtime(unittest.TestCase):
         build=support['compile_native']
         cls.voice=build(cls.root,'voice',[HERE/n for n in ('voice.c','voice-hardware.c','screen-http.c','native-common.c')])
         cls.sim=build(cls.root,'sim-test',[HERE/'test-sim.c',HERE/'native-common.c'])
+        cls.query=build(cls.root,'sim-query',[HERE/'test-query.c',HERE/'native-common.c'])
+        cls.skew=build(cls.root,'clock-skew.so',[HERE/'test-clock-skew.c'],['-shared','-fPIC'])
         cls.bt=build(cls.root,'voice-test',[HERE/n for n in ('test-voice.c','voice-hardware.c','screen-http.c','native-common.c')])
         cls.hw=build(cls.root,'hardware-test',[HERE/'test-hardware.c',HERE/'native-common.c'])
         cls.lib=ctypes.CDLL(str(build(cls.root,'audio.so',[HERE/'voice-hardware.c',HERE/'native-common.c'],['-shared','-fPIC'])))
@@ -109,6 +111,42 @@ class Runtime(unittest.TestCase):
                 return case[cmd]
             expected=old['collect'](0,read);expected.pop('updated')
             self.assertEqual(json.loads(line),expected)
+
+    def test_at_request_deadline_ignores_suspend_skew(self):
+        # After a real deep sleep CLOCK_BOOTTIME runs ahead by the sleep time.
+        # The AT owner validates deadlines on CLOCK_MONOTONIC and rejects a
+        # boottime deadline as out of range, which left SIM/operator/signal
+        # blank on the screen until a reboot.
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);(root/'run/t551m-at6').mkdir(parents=True)
+            owner=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
+            owner.bind(str(root/'run/t551m-at6/cmd.sock'));owner.listen(1)
+            seen={}
+            def serve():
+                connection,_=owner.accept()
+                with connection:
+                    data=b''
+                    while not data.endswith(b'\n'):
+                        block=connection.recv(4096)
+                        if not block:break
+                        data+=block
+                    try:request=json.loads(data)
+                    except ValueError:request={}
+                    now=time.clock_gettime(time.CLOCK_MONOTONIC)
+                    deadline=request.get('deadline')
+                    seen['command']=request.get('command');seen['deadline']=deadline
+                    valid=isinstance(deadline,(int,float)) and now<deadline<=now+90
+                    reply={'ok':valid,'response':'+CSCS: "GSM"\n+COPS: 0,0,"TEST",7\nOK\n'}
+                    if not valid:reply['error']='Request expired before execution'
+                    connection.sendall((json.dumps(reply)+'\n').encode())
+                owner.close()
+            worker=threading.Thread(target=serve,daemon=True);worker.start()
+            env={**os.environ,'E5_NATIVE_ROOT':str(root),'LD_PRELOAD':str(self.skew)}
+            result=subprocess.run([str(self.query)],env=env,capture_output=True,text=True,timeout=10)
+            worker.join(6)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertEqual(seen['command'],'AT+SPACTCARD=0;+COPS?')
+            self.assertIn('TEST',result.stdout)
 
     def test_config_read_failure_preserves_choices(self):
         with tempfile.TemporaryDirectory() as tmp:

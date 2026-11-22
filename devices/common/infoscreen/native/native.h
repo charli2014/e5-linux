@@ -50,10 +50,20 @@ static inline double realtime(void) {
     return g_get_real_time() / 1000000.0;
 }
 static inline double monotime(void) {
-    /* CLOCK_BOOTTIME, not MONOTONIC: deadlines must expire across a system
-     * suspend instead of silently stretching by the whole sleep duration. */
+    /* CLOCK_BOOTTIME, not MONOTONIC: snapshot ages compare with /proc/uptime
+     * and must expire across a system suspend instead of silently stretching
+     * by the whole sleep duration. */
     struct timespec ts;
     clock_gettime(CLOCK_BOOTTIME, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1000000000.0;
+}
+static inline double atdeadline(void) {
+    /* The AT owner validates request deadlines against CLOCK_MONOTONIC
+     * (devices/t551m/atd.c). After a resume BOOTTIME runs ahead by the sleep
+     * time, and the owner rejects that as out of range, so AT deadlines must
+     * never be built from monotime(). */
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
     return (double)ts.tv_sec + (double)ts.tv_nsec / 1000000000.0;
 }
 char *native_path(const char *path);

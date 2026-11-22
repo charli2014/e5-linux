@@ -33,7 +33,7 @@ static char *query(int card, const char *command, GError **error) {
     char *cmd = g_strdup_printf("AT+SPACTCARD=%d;%s", card, command);
     js(request, "command", cmd);
     ji(request, "timeout", 2);
-    jd(request, "deadline", monotime() + 5);
+    jd(request, "deadline", atdeadline() + 5);
     g_free(cmd);
     char *wire = g_strconcat(encode(request), "\n", NULL);
     json_object_put(request);

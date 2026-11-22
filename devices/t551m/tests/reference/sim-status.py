@@ -17,6 +17,15 @@ RUN = Path('/run/t551m-sims.json')
 CARD = Path('/sys/module/sipc_wwan/parameters/card')
 
 
+def uptime():
+    # Snapshot ages are compared with /proc/uptime by the screen and the
+    # dashboard, and both count the time the system spent suspended.
+    try:
+        return time.clock_gettime(time.CLOCK_BOOTTIME)
+    except AttributeError:  # non-Linux test hosts have no suspend to count
+        return time.monotonic()
+
+
 def query(card, command):
     # The card selection and read are one AT transaction on an existing owner.
     request = {'command': f'AT+SPACTCARD={card};{command}', 'timeout': 2,
@@ -96,7 +105,7 @@ def lte_sinr(reply):
 
 
 def collect(card, read=query):
-    row = {'slot': card, 'updated': time.monotonic(), 'present': None,
+    row = {'slot': card, 'updated': uptime(), 'present': None,
            'registration': 'unknown', 'operator': None, 'tech': None,
            'radio_label': None, 'signal': {}, 'error': None}
     try:
@@ -153,7 +162,7 @@ def main():
             active = int(CARD.read_text().strip())
             rows = [collect(0), collect(1)]
             if int(CARD.read_text().strip()) != active:continue
-            data = {'updated': time.monotonic(), 'active': active, 'sims': rows}
+            data = {'updated': uptime(), 'active': active, 'sims': rows}
             tmp = RUN.with_suffix('.part');tmp.write_text(json.dumps(data));tmp.replace(RUN)
         except (OSError, ValueError):pass
         stop.wait(max(.1, 5 - (time.monotonic() - started)))
