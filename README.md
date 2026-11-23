@@ -92,10 +92,11 @@
 3. 更新会自动保留：`/etc/config`、登录密码、SSH 密钥、流量记录、用户屏幕应用、`/etc/e5-power.json`、NV、音频 XML 与触控固件。
 4. **注意**：系统内更新仅支持**同内核 release 与同 OpenWrt 版本**；跨大版本请先看对应 Release 说明。
 
-### 刷机后常用入口与回退
+### 刷机后常用入口与双系统切换
 - **管理后台（LuCI）**：浏览器访问 `http://192.168.9.1`（热点或 USB 网口均可用，USB 主机侧固定为 `192.168.9.2`），默认账号密码为 `root` / `root`。
 - **SSH 登录**：`ssh root@192.168.9.1`（默认密码 `root`；首次使用请务必修改默认密码和 Wi-Fi 密码）。
-- **切回原厂 Android**：在手机 SSH 终端执行 `e5-next-boot android` 后执行 `reboot` 即可。
+- **OpenWrt → 切回原厂 Android**：在手机 SSH 终端执行 `e5-next-boot android` 后执行 `reboot` 即可。
+- **Android → 切回 OpenWrt**：在原厂 Android 系统中安装仓库根目录的 [openwrt系统切换器安卓版.apk](openwrt系统切换器安卓版.apk)（需授予 **root 权限**），即可在安卓系统内直接切换回 OpenWrt。
 
 ---
 
@@ -145,6 +146,7 @@ cd e5-linux
 | `installer/` | 跨平台安装器子模块（`kanoqwq/openwrt-tools`） |
 | `tools/` | 正式构建与发布入口（`build-release.py`、`release-changes.py`、CI 校验） |
 | `docs/` | 专题文档与硬件取证台账（索引见 [docs/README.zh-CN.md](docs/README.zh-CN.md)） |
+| `openwrt系统切换器安卓版.apk` | Android 端双系统切换器（需 root 权限，用于在安卓系统内切换回 OpenWrt） |
 
 ---
 
