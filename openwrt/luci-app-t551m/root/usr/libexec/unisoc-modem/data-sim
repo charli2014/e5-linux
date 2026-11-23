@@ -85,15 +85,22 @@ def radio_apply(slot, enabled):
                     raise RuntimeError('Radio setting saved; data teardown is still pending')
                 time.sleep(.2)
         try:
-            # Match the vendor RIL's per-card RADIO_POWER operation. CFUN=4
-            # is flight mode; it is not the vendor protocol-stack off command.
-            command(f'AT+SPACTCARD={slot};+SFUN={4 if enabled else 5}')
-            result = subprocess.run([at, '-t', '5', f'AT+SPACTCARD={slot};+CFUN?'],
-                                    capture_output=True, text=True, timeout=10)
-            # Stock isRadioOn() treats 0 and 2 as off, 1 as on. Do not
-            # mistake the old flight-mode value 4 for confirmed SFUN=5 off.
-            if result.returncode or not re.search(r'\+CFUN:\s*' + ('1' if enabled else '[02]') + r'\s*(?:\r?\n|$)', result.stdout):
-                raise RuntimeError('Radio setting saved; RF readback not confirmed')
+            # 明确无卡的槽位跳过 SFUN=4/5：对空 SIM 槽启动协议栈会触发展锐 CP 复位
+            # （参见 modemmanager-09-unisoc-sim-presence-power.patch）。
+            probe = subprocess.run([at, '-t', '5', f'AT+SPACTCARD={slot};+CPIN?'],
+                                   capture_output=True, text=True, timeout=10)
+            probe_out = (probe.stdout or '') + '\n' + (probe.stderr or '')
+            absent = bool(re.search(r'\+CME ERROR:\s*(?:10|SIM not inserted)\b', probe_out, re.I))
+            if not absent:
+                # Match the vendor RIL's per-card RADIO_POWER operation. CFUN=4
+                # is flight mode; it is not the vendor protocol-stack off command.
+                command(f'AT+SPACTCARD={slot};+SFUN={4 if enabled else 5}')
+                result = subprocess.run([at, '-t', '5', f'AT+SPACTCARD={slot};+CFUN?'],
+                                        capture_output=True, text=True, timeout=10)
+                # Stock isRadioOn() treats 0 and 2 as off, 1 as on. Do not
+                # mistake the old flight-mode value 4 for confirmed SFUN=5 off.
+                if result.returncode or not re.search(r'\+CFUN:\s*' + ('1' if enabled else '[02]') + r'\s*(?:\r?\n|$)', result.stdout):
+                    raise RuntimeError('Radio setting saved; RF readback not confirmed')
         finally:
             command(f'AT+SPACTCARD={own};+CFUN?')
         if enabled or not any(flags):

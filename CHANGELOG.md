@@ -7,6 +7,29 @@
 
 ## 未发布
 
+### 1. 修复畅行60 开机 90 秒锁网重放超时与 AT 通道分流遗漏
+
+- `rootfs/overlay/opt/e5/e5-at`：补齐 `changxing60` 与 `y60` 到 `t551m-at`（`nr2/nr6/nr7` 独立 AT 通道）分流白名单（短信相关命令仍保持由 ModemManager 独占）。
+- 解决了开机时 `ModemManager-wrapper` 等待 `boot-replay early`、而 `e5-at` 又回退等待 `ModemManager` 导致的 90 秒死锁超时，以及进入后台首次提示 `Lock state unavailable; refresh to read the modem` 的问题。
+- 真机实测：`boot-replay early` 从 90 秒超时降至 0.81 秒完成，`ModemManager` 开机 3 秒启动，5G `wan` 约 15 秒拨通，锁网缓存 `/tmp/unisoc-modem/sim0/lock.json` 开机自动生成。
+
+### 2. 修复单卡休眠唤醒后基带复位与循环掉网
+
+- `openwrt/luci-app-t551m/root/usr/libexec/unisoc-modem/data-sim`：在向指定卡槽发送 `AT+SPACTCARD=<slot>;+SFUN=4/5` 之前，先执行只读探测 `AT+SPACTCARD=<slot>;+CPIN?`（与 ModemManager 冷启动补丁对齐）。若明确返回 `+CME ERROR: 10`（无卡），则跳过该空槽的 `SFUN` 操作，避免对空 SIM 槽启动协议栈触发展锐 CP 复位（`modem@2/modem@3` 重启及 `nr2` AT 通道进入 `quarantined`）。
+- `openwrt/overlay/usr/libexec/e5-power-state`：`restore_radio()` 仅在全部待恢复卡槽均成功开启后才删除 `/etc/e5/power-radio-restore.json`；若部分失败，逐槽记录已完成进度并保留标记，每 15 秒自动重试未恢复的卡槽，成功后自动拉起 WAN。
+- 真机实测：畅行60 单卡（SIM1 在位、SIM2 空槽）连续完成 4 次真实 DEEP 深度休眠与唤醒（`suspend_stats/success=4, fail=0`），每次唤醒后 5–7 秒自动恢复 5G 联网，无基带复位与 AT 隔离报错。
+
+### 3. 修复 BusyBox 下 TTL 规则应用失败
+
+- `openwrt/luci-app-t551m/root/usr/libexec/unisoc-modem/ttl-engine`：将 BusyBox `flock` 不支持的 `flock -w 10 -x 9` 改为兼容的 `flock -n -x 9` 重试循环，消除开机 `S97unisoc-ttl` 与 `ifup wan` 时的 `flock: unrecognized option: w` 及 `Failed to apply saved TTL` 报错。
+
+### 4. 测试与已知边界
+
+- 补充单元测试：`devices/t551m/test_at_routing.py`、`devices/test_power_state.py`、`openwrt/tests/sim-radio.py` 全部通过（60/60）。
+- 已知现象：插着充电器进入 DEEP 时，展锐充电管理驱动的 `Charger Manager wakeup timer`（约 6 秒）会周期唤醒系统；纯电池待机未做整夜长睡耗时统计。
+
+## 历史记录（r20261122）
+
 ### 1. 项目主页与开发文档
 
 - `README.md` 改为畅行60 当前项目说明（中文）：硬件、已验证功能、安装/更新、

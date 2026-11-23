@@ -117,7 +117,19 @@ esac
 mkdir -p "${CONF%/*}" "${LOCK%/*}"
 exec 9>"$LOCK"
 # Hotplug waits and enumerates again, so the last new interface is not lost.
-if [ "$1" = apply ]; then flock -w 10 -x 9; else flock -n -x 9; fi || {
+# BusyBox flock 不支持 util-linux 的 -w，这里用非阻塞重试实现 10 秒超时。
+lock_ok=0
+if [ "$1" = apply ]; then
+    n=0
+    while [ "$n" -lt 10 ]; do
+        if flock -n -x 9; then lock_ok=1; break; fi
+        sleep 1
+        n=$((n + 1))
+    done
+elif flock -n -x 9; then
+    lock_ok=1
+fi
+[ "$lock_ok" = 1 ] || {
     echo 'TTL operation is busy; retry shortly' >&2; exit 75;
 }
 old=$(saved)

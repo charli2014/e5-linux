@@ -29,6 +29,7 @@ import time
 DEFAULTS = {'idle_min': 0, 'deep_min': 0, 'hold_awake_min': 5, 'inhibit': False, 'deep_test': False}
 TICK = 5
 RETRY = 300
+RESTORE_RETRY = 15
 
 
 def boottime():
@@ -274,6 +275,7 @@ class Machine:
         self.since = clock()
         self.idle_deadline = None
         self.deep_deadline = None
+        self.restore_deadline = None
         self.hold_until = 0
         self.episode_start = None
         self.multiplier = 1
@@ -303,13 +305,23 @@ class Machine:
                 saved = None
         errors = []
         if isinstance(saved, list) and len(saved) == 2:
+            remaining = list(saved)
             for slot, on in enumerate(saved):
                 if on:
                     error = self.ops.radio_set(slot, True)
                     if error:
                         errors.append(error)
-        self.drop_marker()
-        self.radio_saved = None
+                    else:
+                        # 已恢复成功的卡槽从待恢复列表清除，避免重试时重复操作
+                        remaining[slot] = False
+            if errors:
+                self.radio_saved = remaining
+                if self.marker_path.exists():
+                    atomic_json(self.marker_path, {'enabled': remaining})
+        if not errors:
+            self.drop_marker()
+            self.radio_saved = None
+            self.restore_deadline = None
         return errors
 
     def boot(self):
@@ -317,7 +329,9 @@ class Machine:
             errors = self.restore_radio()
             if errors:
                 self.last_error = '; '.join(errors)
-            self.ops.log('restored radio policy saved before sleep')
+                self.restore_deadline = self.clock() + RESTORE_RETRY
+            else:
+                self.ops.log('restored radio policy saved before sleep')
         error = self.ops.usb_runtime_pm()
         if error:
             self.ops.log('USB runtime PM not applied: ' + error)
@@ -345,7 +359,8 @@ class Machine:
             error = self.ops.radio_set(slot, False)
             if error:
                 self.last_error = 'radio off failed: %s' % error
-                self.restore_radio()
+                if self.restore_radio():
+                    self.restore_deadline = now + RESTORE_RETRY
                 self.idle_deadline = now + RETRY
                 return
         self.ops.service('t551m-sim-status', False)
@@ -397,6 +412,7 @@ class Machine:
             self.ops.log(self.last_error)
         if errors:
             self.last_error = '; '.join(errors)
+            self.restore_deadline = self.clock() + RESTORE_RETRY
         self.ops.log('awake from DEEP, network restoring')
 
     def wake(self, reason, now):
@@ -417,6 +433,7 @@ class Machine:
         self.deep_blocked = None
         if errors:
             self.last_error = '; '.join(errors)
+            self.restore_deadline = now + RESTORE_RETRY
         self.ops.log('awake (%s), hold %d min' % (reason, self.config['hold_awake_min']))
 
     def reload(self, now):
@@ -451,6 +468,19 @@ class Machine:
 
     def tick(self, now):
         self.reload(now)
+        if self.state == 'ONLINE' and self.marker_path.exists():
+            if self.restore_deadline is None or now >= self.restore_deadline:
+                errors = self.restore_radio()
+                if errors:
+                    self.last_error = '; '.join(errors)
+                    self.restore_deadline = now + RESTORE_RETRY
+                else:
+                    self.last_error = None
+                    self.ops.wan_resume()
+                    self.ops.log('recovered pending radio policy')
+            self.idle_deadline = None
+            self.publish(now)
+            return
         if self.ops.upgrade_locked():
             if self.state != 'ONLINE':
                 self.wake('upgrade', now)

@@ -166,6 +166,20 @@ class RadioTests(unittest.TestCase):
         self.assertEqual(self.policy.read_text(),'1 1\n')
         self.assertEqual(self.commands,[])
 
+    def test_absent_slot_skips_sfun_and_keeps_policy(self):
+        orig = self.scope['subprocess'].run
+        def absent_slot1(argv, **kw):
+            if argv[-1] == 'AT+SPACTCARD=1;+CPIN?':
+                self.commands.append(argv)
+                return subprocess.CompletedProcess(argv, 1, '+CME ERROR: 10\n', '')
+            return orig(argv, **kw)
+        with patch.object(self.scope['subprocess'], 'run', absent_slot1):
+            self.apply('1', False)
+            self.apply('1', True)
+        self.assertEqual(self.policy.read_text(), '1 1\n')
+        self.assertFalse(any('+SFUN=' in c[-1] for c in self.commands))
+        self.assertTrue(self.commands[-1][-1] == '--enable' or self.commands[-1][-1].endswith('SPACTCARD=0;+CFUN?'))
+
     def test_boot_proto_waits_without_enable_or_retry_when_data_radio_disabled(self):
         scope=runpy.run_path(str(TOP/'devices/t551m/network-startup.py'))
         block=scope['RADIO_POLICY'].replace('/etc/e5/sim-radio',str(self.policy)).replace(

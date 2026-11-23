@@ -263,8 +263,29 @@ class PowerTest(unittest.TestCase):
         self.advance(60)
         self.assertEqual(self.machine.state, 'ONLINE')
         self.assertIn(('radio', 0, True), self.ops.calls)  # rolled back
-        self.assertFalse(self.marker.exists())
+        # 回滚失败时保留恢复标记，直到后续重试成功才清除
+        self.assertTrue(self.marker.exists())
         self.assertEqual(self.published()['idle_in'], 300)
+        self.ops.radio_error = None
+        self.advance(15)
+        self.assertFalse(self.marker.exists())
+        self.assertIsNone(self.machine.last_error)
+
+    def test_deep_radio_restore_failure_keeps_marker_and_retries(self):
+        self.write_config(idle_min=1, deep_min=1)
+        self.reach_idle()
+        self.advance(60)  # deep timer arms
+        self.ops.radio_error = 'modem not ready'
+        self.advance(60)  # enter DEEP, resume fails radio restore
+        self.assertEqual(self.machine.state, 'ONLINE')
+        self.assertTrue(self.marker.exists())
+        self.assertIn('modem not ready', self.machine.last_error)
+        # 重试成功前不应再次进入 IDLE
+        self.ops.radio_error = None
+        self.advance(15)
+        self.assertFalse(self.marker.exists())
+        self.assertIsNone(self.machine.last_error)
+        self.assertEqual(self.ops.policy, [True, True])
 
     def test_short_episode_backoff(self):
         self.reach_idle()
