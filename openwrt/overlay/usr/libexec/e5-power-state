@@ -139,7 +139,10 @@ class Ops:
                 if not obj.startswith('hostapd.'):
                     continue
                 data = json.loads(self.run(['ubus', '-t', '3', 'call', obj, 'get_clients'], timeout=5).stdout)
-                total += len(data.get('clients', {}))
+                # 仅统计已完成认证的客户端，避免密码错误等未通过握手的关联打断休眠
+                clients = data.get('clients', {})
+                total += sum(1 for info in clients.values()
+                             if isinstance(info, dict) and info.get('authorized') is True)
             return total
         except (OSError, ValueError, subprocess.SubprocessError):
             return None

@@ -510,5 +510,32 @@ class UsbRuntimePmTest(unittest.TestCase):
         self.assertEqual((self.udc / 'power/control').read_text(), 'on\n')
 
 
+class ClientsFilterTest(unittest.TestCase):
+    def test_only_authorized_clients_count_as_activity(self):
+        ops = Ops()
+        payload = json.dumps({'clients': {
+            'aa:bb:cc:dd:ee:01': {'auth': True, 'assoc': True, 'authorized': False},
+            'aa:bb:cc:dd:ee:02': {'auth': True, 'assoc': True, 'authorized': True},
+        }})
+        def fake_run(args, **kw):
+            if args[:2] == ['ubus', 'list']:
+                return subprocess.CompletedProcess(args, 0, 'hostapd.wlan0\n', '')
+            return subprocess.CompletedProcess(args, 0, payload, '')
+        ops.run = fake_run
+        self.assertEqual(ops.clients(), 1)
+
+    def test_unauthorized_only_returns_zero(self):
+        ops = Ops()
+        payload = json.dumps({'clients': {
+            'e6:d5:7e:30:12:23': {'auth': True, 'assoc': True, 'authorized': False},
+        }})
+        def fake_run(args, **kw):
+            if args[:2] == ['ubus', 'list']:
+                return subprocess.CompletedProcess(args, 0, 'hostapd.wlan0\n', '')
+            return subprocess.CompletedProcess(args, 0, payload, '')
+        ops.run = fake_run
+        self.assertEqual(ops.clients(), 0)
+
+
 if __name__ == '__main__':
     unittest.main()
