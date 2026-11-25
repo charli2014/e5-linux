@@ -182,9 +182,12 @@ class RadioTests(unittest.TestCase):
 
     def test_boot_proto_waits_without_enable_or_retry_when_data_radio_disabled(self):
         scope=runpy.run_path(str(TOP/'devices/t551m/network-startup.py'))
+        guard = self.root / 'radio-allowed'
+        guard.write_bytes(TOOL.with_name('radio-allowed').read_bytes().replace(b'\r\n', b'\n'))
+        guard.chmod(0o755)
         block=scope['RADIO_POLICY'].replace('/etc/e5/sim-radio',str(self.policy)).replace(
             '/sys/module/sipc_wwan/parameters/card',str(self.card)).replace(
-            '/usr/libexec/unisoc-modem/radio-allowed',str(TOOL.with_name('radio-allowed')))
+            '/usr/libexec/unisoc-modem/radio-allowed',str(guard))
         for slot in (0,1):
             self.card.write_text(str(slot))
             for flags in ('0 0','0 1','1 0','1 1'):
