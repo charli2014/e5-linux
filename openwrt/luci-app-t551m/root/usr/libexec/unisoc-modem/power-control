@@ -11,8 +11,8 @@ import os
 from pathlib import Path
 import sys
 
-DEFAULTS = {'idle_min': 0, 'deep_min': 0, 'hold_awake_min': 5, 'inhibit': False, 'deep_test': False}
-UI_KEYS = ('idle_min', 'deep_min', 'hold_awake_min', 'inhibit')
+DEFAULTS = {'idle_min': 0, 'deep_min': 0, 'hold_awake_min': 5, 'inhibit': False, 'wake_on_client': False, 'deep_test': False}
+UI_KEYS = ('idle_min', 'deep_min', 'hold_awake_min', 'inhibit', 'wake_on_client')
 
 
 def atomic_json(path, data):
@@ -38,7 +38,7 @@ def validate(config):
         value = config.get(key, DEFAULTS[key])
         if type(value) is not int or not 0 <= value <= 1440:
             raise ValueError('%s must be 0..1440 minutes' % key)
-    for key in ('inhibit', 'deep_test'):
+    for key in ('inhibit', 'wake_on_client', 'deep_test'):
         if type(config.get(key, DEFAULTS[key])) is not bool:
             raise ValueError('%s must be a boolean' % key)
     if config.get('hold_awake_min', DEFAULTS['hold_awake_min']) < 1:
@@ -62,12 +62,15 @@ class Control:
             return dict(DEFAULTS)
 
     def config(self):
+        defaults = self.defaults()
         try:
             data = json.loads(self.config_path.read_text())
             validate(data)
-            return data
+            merged = dict(defaults)
+            merged.update(data)
+            return merged
         except FileNotFoundError:
-            return self.defaults()
+            return defaults
         except (OSError, ValueError):
             return dict(DEFAULTS)
 

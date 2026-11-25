@@ -10,6 +10,7 @@ key, USB or the charger wake it. Policy lives in /etc/e5-power.json:
   deep_min       further IDLE minutes before DEEP (0 keeps the hotspot on)
   hold_awake_min minutes to stay awake after any wake before re-arming
   inhibit        manual keep-awake
+  wake_on_client keep cellular off after wake/bright screen until Wi-Fi/USB connects
   deep_test      stage DEEP through /sys/power/pm_test instead of real sleep
 
 No AT commands are issued here: radio changes go through unisoc-modem/data-sim
@@ -26,10 +27,11 @@ import subprocess
 import sys
 import time
 
-DEFAULTS = {'idle_min': 0, 'deep_min': 0, 'hold_awake_min': 5, 'inhibit': False, 'deep_test': False}
+DEFAULTS = {'idle_min': 0, 'deep_min': 0, 'hold_awake_min': 5, 'inhibit': False, 'wake_on_client': False, 'deep_test': False}
 TICK = 5
 RETRY = 300
 RESTORE_RETRY = 15
+DEFAULTS_PATH = Path('/usr/share/e5-power/defaults.json')
 
 
 def boottime():
@@ -46,8 +48,21 @@ def atomic_json(path, data):
     tmp.replace(path)
 
 
-def load_config(path):
+def load_defaults(defaults_path=DEFAULTS_PATH):
     cfg = dict(DEFAULTS)
+    if defaults_path is None:
+        return cfg
+    try:
+        raw = json.loads(defaults_path.read_text())
+    except (OSError, ValueError):
+        return cfg
+    if isinstance(raw, dict) and isinstance(raw.get('wake_on_client'), bool):
+        cfg['wake_on_client'] = raw['wake_on_client']
+    return cfg
+
+
+def load_config(path, defaults_path=DEFAULTS_PATH):
+    cfg = load_defaults(defaults_path)
     try:
         raw = json.loads(path.read_text())
     except FileNotFoundError:
@@ -57,12 +72,12 @@ def load_config(path):
     if not isinstance(raw, dict) or set(raw) - set(DEFAULTS):
         return cfg, 'unknown power setting'
     for key in ('idle_min', 'deep_min', 'hold_awake_min'):
-        value = raw.get(key, DEFAULTS[key])
+        value = raw.get(key, cfg[key])
         if type(value) is not int or not 0 <= value <= 1440:
             return cfg, '%s must be 0..1440 minutes' % key
         cfg[key] = value
-    for key in ('inhibit', 'deep_test'):
-        value = raw.get(key, DEFAULTS[key])
+    for key in ('inhibit', 'wake_on_client', 'deep_test'):
+        value = raw.get(key, cfg[key])
         if type(value) is not bool:
             return cfg, '%s must be a boolean' % key
         cfg[key] = value
@@ -266,13 +281,14 @@ class Ops:
 
 
 class Machine:
-    def __init__(self, ops, config_path, state_path, marker_path, clock=boottime):
+    def __init__(self, ops, config_path, state_path, marker_path, clock=boottime, defaults_path=DEFAULTS_PATH):
         self.ops = ops
         self.config_path = config_path
         self.state_path = state_path
         self.marker_path = marker_path
+        self.defaults_path = defaults_path
         self.clock = clock
-        self.config, self.config_error = load_config(config_path)
+        self.config, self.config_error = load_config(config_path, defaults_path)
         self.config_mtime = self.mtime()
         self.state = 'ONLINE'
         self.since = clock()
@@ -340,11 +356,14 @@ class Machine:
             self.ops.log('USB runtime PM not applied: ' + error)
         self.hold_until = self.clock() + self.config['hold_awake_min'] * 60
 
-    def activity(self):
+    def network_client(self):
         clients = self.ops.clients()
         if clients is None or clients > 0:
             return True
-        if self.ops.usb_peer():
+        return self.ops.usb_peer()
+
+    def activity(self):
+        if self.network_client():
             return True
         return self.ops.brightness() > 0
 
@@ -400,22 +419,33 @@ class Machine:
         error = self.ops.suspend(self.config['deep_test'])
         # Resume lands here; a failed suspend lands here too.
         self.ops.wifi_set(True)
+        woke_at = self.clock()
+        if error:
+            self.last_error = 'suspend failed: %s' % error
+            self.ops.log(self.last_error)
+        # 按需联网模式：无外部 Wi-Fi/USB 设备连接时，唤醒后保持在 IDLE 等待连接，不提前拉起基带
+        if self.config['wake_on_client'] and not self.network_client():
+            self.state = 'IDLE'
+            self.since = woke_at
+            self.episode_start = woke_at
+            self.idle_deadline = None
+            self.deep_deadline = None
+            self.deep_blocked = None
+            self.ops.log('awake from DEEP into IDLE, waiting for client before restoring cellular')
+            return
         errors = self.restore_radio()
         self.ops.service('t551m-sim-status', True)
         self.ops.service('e5-bt', True)
         self.ops.wan_resume()
         self.state = 'ONLINE'
-        self.since = now
-        self.hold_until = self.clock() + self.config['hold_awake_min'] * 60
+        self.since = woke_at
+        self.hold_until = woke_at + self.config['hold_awake_min'] * 60
         self.idle_deadline = None
         self.deep_deadline = None
         self.multiplier = 1
-        if error:
-            self.last_error = 'suspend failed: %s' % error
-            self.ops.log(self.last_error)
         if errors:
             self.last_error = '; '.join(errors)
-            self.restore_deadline = self.clock() + RESTORE_RETRY
+            self.restore_deadline = woke_at + RESTORE_RETRY
         self.ops.log('awake from DEEP, network restoring')
 
     def wake(self, reason, now):
@@ -444,7 +474,7 @@ class Machine:
         if mtime == self.config_mtime:
             return
         self.config_mtime = mtime
-        config, error = load_config(self.config_path)
+        config, error = load_config(self.config_path, self.defaults_path)
         if error:
             self.last_error = error
             return
@@ -503,10 +533,22 @@ class Machine:
                 self.wake('radio policy changed', now)
                 self.publish(now)
                 return
-        if active:
-            if self.state != 'ONLINE':
+            if self.config['wake_on_client']:
+                if self.network_client():
+                    self.wake('activity', now)
+                    self.publish(now)
+                    return
+                if self.ops.brightness() > 0:
+                    # 仅亮屏查看状态时不唤醒基带，但暂停深睡倒计时避免看屏途中息屏挂起
+                    self.deep_deadline = None
+                    self.publish(now)
+                    return
+            elif active:
                 self.wake('activity', now)
-            elif now >= self.hold_until:
+                self.publish(now)
+                return
+        elif active:
+            if now >= self.hold_until:
                 self.idle_deadline = None
             self.publish(now)
             return

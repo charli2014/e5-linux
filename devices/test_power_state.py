@@ -102,7 +102,7 @@ class PowerTest(unittest.TestCase):
 
     def make_machine(self):
         machine = Machine(self.ops, self.config, self.state_file, self.marker,
-                          clock=lambda: self.now[0])
+                          clock=lambda: self.now[0], defaults_path=None)
         machine.boot()
         return machine
 
@@ -535,6 +535,96 @@ class ClientsFilterTest(unittest.TestCase):
             return subprocess.CompletedProcess(args, 0, payload, '')
         ops.run = fake_run
         self.assertEqual(ops.clients(), 0)
+
+
+class WakeOnClientTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.config = self.root / 'e5-power.json'
+        self.defaults = self.root / 'defaults.json'
+        self.state_file = self.root / 'run/e5-power.json'
+        self.marker = self.root / 'etc/e5/power-radio-restore.json'
+        self.now = [1000.0]
+        self.ops = FakeOps()
+        self.defaults.write_text(json.dumps({
+            'idle_min': 30, 'deep_min': 0, 'hold_awake_min': 5,
+            'inhibit': False, 'wake_on_client': True
+        }))
+        self.config.write_text(json.dumps({
+            'idle_min': 1, 'deep_min': 1, 'hold_awake_min': 5, 'inhibit': False
+        }))
+
+    def make_machine(self):
+        m = Machine(self.ops, self.config, self.state_file, self.marker,
+                    clock=lambda: self.now[0], defaults_path=self.defaults)
+        m.boot()
+        return m
+
+    def tick(self, m, seconds):
+        self.now[0] += seconds
+        m.tick(self.now[0])
+
+    def test_missing_key_inherits_board_default_and_explicit_false_is_kept(self):
+        m = self.make_machine()
+        self.assertTrue(m.config['wake_on_client'])
+        # power-control 同样继承 board defaults 并允许写入布尔开关
+        pc = runpy.run_path(str(HERE.parent / 'openwrt/luci-app-t551m/root/usr/libexec/unisoc-modem/power-control'))
+        ctrl = pc['Control'](self.root)
+        ctrl.config_path = self.config
+        ctrl.defaults_path = self.defaults
+        ctrl.state_path = self.state_file
+        self.assertTrue(ctrl.config()['wake_on_client'])
+        res = ctrl.apply({'wake_on_client': False}, True)
+        self.assertFalse(res['config']['wake_on_client'])
+        self.config.write_text(json.dumps({
+            'idle_min': 1, 'deep_min': 1, 'hold_awake_min': 5,
+            'inhibit': False, 'wake_on_client': False
+        }))
+        import os
+        os.utime(self.config, (1800000001, 1800000001))
+        m.tick(self.now[0])
+        self.assertFalse(m.config['wake_on_client'])
+
+    def test_deep_wake_without_client_stays_idle_and_screen_on_keeps_cellular_off(self):
+        m = self.make_machine()
+        self.tick(m, 301)  # hold expires
+        self.tick(m, 60)   # IDLE
+        self.tick(m, 60)   # deep timer arms
+        self.ops.calls.clear()
+        self.tick(m, 60)   # DEEP -> suspend returns without clients
+        self.assertEqual(m.state, 'IDLE')
+        self.assertIn(('wifi', True), self.ops.calls)
+        self.assertFalse(any(c[0] == 'radio' and c[2] is True for c in self.ops.calls))
+        self.assertNotIn(('wan',), self.ops.calls)
+        self.assertTrue(self.marker.exists())
+        # 亮屏查看时间/状态：不拉起基带，但暂停深睡倒计时
+        self.ops.bright = 120
+        self.tick(m, 60)
+        self.assertEqual(m.state, 'IDLE')
+        self.assertIsNone(m.deep_deadline)
+        self.assertFalse(any(c[0] == 'radio' and c[2] is True for c in self.ops.calls))
+        # 息屏后继续等待，无客户端时直接重新进入 DEEP
+        self.ops.bright = 0
+        self.tick(m, 5)
+        self.tick(m, 60)
+        self.assertEqual(sum(1 for c in self.ops.calls if c == ('suspend', False)), 2)
+
+    def test_wifi_or_usb_client_wakes_from_idle_to_online(self):
+        m = self.make_machine()
+        self.tick(m, 301)
+        self.tick(m, 60)
+        self.tick(m, 60)
+        self.tick(m, 60)  # DEEP 后留在 IDLE
+        self.assertEqual(m.state, 'IDLE')
+        self.ops.calls.clear()
+        self.ops.client_count = 1
+        self.tick(m, 5)
+        self.assertEqual(m.state, 'ONLINE')
+        self.assertIn(('radio', 0, True), self.ops.calls)
+        self.assertIn(('wan',), self.ops.calls)
+        self.assertFalse(self.marker.exists())
 
 
 if __name__ == '__main__':

@@ -143,6 +143,10 @@ return view.extend({
         this.inhibit = node('input'); this.inhibit.type = 'checkbox'; this.inhibit.checked = !!cfg.inhibit;
         check.append(this.inhibit,node('span',null,text('保持唤醒（暂停自动待机）','Keep awake (pause automatic standby)')));
         form.append(check);
+        const wakeCheck = node('label','power-check');
+        this.wakeOnClient = node('input'); this.wakeOnClient.type = 'checkbox'; this.wakeOnClient.checked = !!cfg.wake_on_client;
+        wakeCheck.append(this.wakeOnClient,node('span',null,text('仅连接设备时开启基带（深睡唤醒/亮屏保持浅待机，有 Wi-Fi 或 USB 连接才恢复联网）','Only restore cellular when a client connects (keep idle on wake/bright screen until Wi-Fi or USB connects)')));
+        form.append(wakeCheck);
         form.append(node('p','power-note',text('浅待机与深睡期间不接收短信和来电。计时参数保存后即时生效，无需重启。','SMS and calls are not received during idle or deep sleep. Timer changes apply immediately without a restart.')));
         const actions = node('div','power-actions');
         const apply = node('button','mud-btn on',text('应用设置','Apply settings'));
@@ -171,6 +175,7 @@ return view.extend({
                     changes[key] = +input.value;
                 });
                 changes.inhibit = this.inhibit.checked;
+                changes.wake_on_client = this.wakeOnClient.checked;
                 result = await applyPower(changes,true);
             }
             if (!result.ok) throw new Error(result.error || 'Failed');

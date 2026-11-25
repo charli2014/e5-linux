@@ -73,7 +73,7 @@ def stage_power(root):
     root = Path(root)
     # deep_min ships 0 (deep sleep disabled) until a controlled suspend test
     # passes on this board; IDLE alone already removes the modem/BT load.
-    defaults = {'idle_min': 30, 'deep_min': 0, 'hold_awake_min': 5, 'inhibit': False}
+    defaults = {'idle_min': 30, 'deep_min': 0, 'hold_awake_min': 5, 'inhibit': False, 'wake_on_client': True}
     share = root / 'usr/share/e5-power/defaults.json'
     share.parent.mkdir(parents=True, exist_ok=True)
     share.write_text(json.dumps(defaults, separators=(',', ':')) + '\n')

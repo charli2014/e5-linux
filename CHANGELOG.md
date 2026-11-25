@@ -7,6 +7,29 @@
 
 ## 未发布
 
+### 1. 新增“仅连接设备时开启基带”按需联网省电选项（畅行60 默认开启）
+
+- `openwrt/overlay/usr/libexec/e5-power-state`：新增 `wake_on_client` 策略项（畅行60 在 `/usr/share/e5-power/defaults.json` 中默认开启 `true`；老配置升级缺失该字段时自动继承板级默认值，用户手动关闭则严格保留）。
+  - 从 `DEEP` 深度休眠唤醒时，若无已认证 Wi-Fi 客户端或 USB 数据设备连接，仅恢复 Wi-Fi 热点等待连接，**保持在 `IDLE` 浅待机，不提前拉起 5G 基带、蓝牙与 SIM 轮询**。
+  - 在 `IDLE` 状态下仅按电源键亮屏查看时间/电量时，不唤醒基带联网（同时暂停 `DEEP` 倒计时避免看屏途中息屏挂起）；直到有已认证 Wi-Fi 客户端关联、插上 USB 数据口、或用户手动打开射频/勾选“保持唤醒”时，才立即恢复基带并拨号联网。
+- `openwrt/luci-app-t551m/root/usr/libexec/unisoc-modem/power-control` & `devices/common/infoscreen/power/backend.uc`：后端校验与配置合并同步支持 `wake_on_client`。
+- `openwrt/luci-app-t551m/htdocs/luci-static/resources/view/mu300/power.js` & `devices/common/infoscreen/power/power.js`：LuCI 网页端（`admin/modem/power`）与手机屏端电源设置页同步增加“仅连接设备时开启基带”开关，保存后即时生效。
+
+### 2. 防未认证 Wi-Fi 设备误唤醒待机
+
+- `openwrt/overlay/usr/libexec/e5-power-state`：`clients()` 改为仅统计 `authorized: true` 的已认证客户端，忽略密码错误或未完成四次握手的临时关联，避免周边旧设备/错误密码重连打断待机倒计时或误唤醒 `IDLE`。
+
+### 3. 仓库文档与安卓端切换器
+
+- `README.md`：重构项目首页说明，明确列出参考项目（`sprd-linux-devs/e5-linux`、`Enceka/linux-lts-e5`、`CharlesGool/e5-sleep-kernel`、`kanoqwq/openwrt-tools`）、本仓库主要改动、刷机与更新步骤、默认管理地址与账密（`root/root`）、双系统切换方式及文档阅读路线。
+- 新增 `openwrt系统切换器安卓版.apk`：用于在原厂 Android 系统内切换回 OpenWrt（需 root 权限）。
+
+### 4. 测试覆盖
+
+- `devices/test_power_state.py`：新增未认证客户端过滤、板级默认值继承、DEEP 唤醒停留 `IDLE`、亮屏不拉基带、Wi-Fi/USB 连入立即唤醒联网等单测，全部通过。
+
+## 历史记录（r20261123）
+
 ### 1. 修复畅行60 开机 90 秒锁网重放超时与 AT 通道分流遗漏
 
 - `rootfs/overlay/opt/e5/e5-at`：补齐 `changxing60` 与 `y60` 到 `t551m-at`（`nr2/nr6/nr7` 独立 AT 通道）分流白名单（短信相关命令仍保持由 ModemManager 独占）。

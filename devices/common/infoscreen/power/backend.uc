@@ -25,6 +25,10 @@ return function(ctx) {
 				if (type(b.inhibit) != 'bool') return fail({ ok: false, error: 'Invalid keep-awake flag' }, 400);
 				changes.inhibit = b.inhibit;
 			}
+			if (b.wake_on_client != null) {
+				if (type(b.wake_on_client) != 'bool') return fail({ ok: false, error: 'Invalid client-wake flag' }, 400);
+				changes.wake_on_client = b.wake_on_client;
+			}
 			let r = ctx.ubus('e5-power', 'apply', { changes, persist: true });
 			return r ?? fail(null);
 		},

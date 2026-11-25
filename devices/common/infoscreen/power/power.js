@@ -111,6 +111,12 @@ function render(s) {
 	inputs.inhibit = inhibit;
 	check.append(inhibit, el('span', null, L('保持唤醒（暂停自动待机）', 'Keep awake (pause standby)')));
 	form.append(check);
+	const wakeCheck = el('label', 'check');
+	const wakeOnClient = el('input');
+	wakeOnClient.type = 'checkbox'; wakeOnClient.checked = !!cfg.wake_on_client;
+	inputs.wake_on_client = wakeOnClient;
+	wakeCheck.append(wakeOnClient, el('span', null, L('仅连接设备时开启基带（亮屏保持浅待机，连 Wi-Fi 或 USB 才联网）', 'Only restore cellular on client connect (stay idle until Wi-Fi or USB)')));
+	form.append(wakeCheck);
 	form.append(el('p', 'note', L('浅待机与深睡期间不接收短信和来电。计时参数保存后即时生效。',
 		'SMS and calls are not received while idle or asleep. Timer changes apply immediately.')));
 	const actions = el('div', 'actions');
@@ -143,6 +149,7 @@ async function change(reset) {
 				body[key] = +input.value;
 			}
 			body.inhibit = inputs.inhibit.checked;
+			body.wake_on_client = inputs.wake_on_client.checked;
 			result = await e5.api('/apply', { method: 'POST', body });
 		}
 		if (!result.ok) throw new Error(result.error || 'Failed');
