@@ -6,6 +6,7 @@ manual clock, so no radio, service or suspend is ever touched. Ops.suspend's
 pm_test staging is exercised against a temporary sysfs tree.
 """
 import json
+import os
 from pathlib import Path
 import runpy
 import subprocess
@@ -99,6 +100,8 @@ class PowerTest(unittest.TestCase):
         cfg = {'idle_min': 0, 'deep_min': 0, 'hold_awake_min': 5, 'inhibit': False}
         cfg.update(kwargs)
         self.config.write_text(json.dumps(cfg))
+        if hasattr(self, 'machine'):
+            self.machine.config_mtime = None
 
     def make_machine(self):
         machine = Machine(self.ops, self.config, self.state_file, self.marker,
@@ -582,7 +585,6 @@ class WakeOnClientTest(unittest.TestCase):
             'idle_min': 1, 'deep_min': 1, 'hold_awake_min': 5,
             'inhibit': False, 'wake_on_client': False
         }))
-        import os
         os.utime(self.config, (1800000001, 1800000001))
         m.tick(self.now[0])
         self.assertFalse(m.config['wake_on_client'])
