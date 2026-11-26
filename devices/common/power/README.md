@@ -12,18 +12,23 @@ licenses. Credit: CharlesGool.
 - 0006 adapts the last two patches: GPU start failures unwind power, and the
   camera/DCAM/ISP sequencing and three-sample PMU confirmation follow the E5
   stock qogirn6l driver. Clock references and bus failures are handled explicitly.
-  The camera provider is built in, matching only `sprd,qogirl6l-camsys-domain`;
-  it does not claim other camera-domain compatibles.
+  The camera provider is built in, matching `sprd,qogirl6l-camsys-domain`.
+- 0007 binds the same provider to the UMS9620 (qogirn6pro) node
+  `sprd,qogirn6pro-camsys-domain`, from which the driver already reads the
+  force/automatic/state triples and `clk_mm_eb`. Without it the bootloader's
+  PD_CAMERA stays powered on Changxing 60 and the provider never probes.
 
 ## Order and wiring
 
-The files apply in the order above; 0006 is an increment on 0004 and 0005, so
-do not reorder them. `devices/changxing60/prepare-kernel.py` feeds them to
-`git apply` after the board preparation, with CRLF normalized, and skips the
-stack when 0006 already reverses. They are not applied to any other profile.
+The files apply in the order above; 0006 is an increment on 0004 and 0005 and
+0007 on 0006, so do not reorder them. `devices/changxing60/prepare-kernel.py`
+feeds them to `git apply` after the board preparation, with CRLF normalized,
+and skips the stack when 0007 already reverses. They are not applied to any
+other profile.
 
 The stack was checked against the registered donor commit
-`Enceka/linux-lts-e5@020b970e` (all five apply, 0006 after 0004/0005).
+`Enceka/linux-lts-e5@020b970e` (0004/0005/0006 as before; 0007 applies and
+reverses on top of 0006).
 
 ## Kernel configuration
 
@@ -36,16 +41,21 @@ symbol is kept instead of being dropped as unknown.
 
 ## What is and is not established
 
-- Verified: the five patches apply cleanly to the donor source and the patched
-  tree compiles in the Changxing 60 CI kernel job.
+- Verified: the patches apply cleanly to the donor source in stack order and
+  the patched tree compiles in the Changxing 60 CI kernel job.
+- Verified on Changxing 60 hardware (2026-11-26): the running DT node is
+  `sprd,qogirn6pro-camsys-domain` with all nine register triples and
+  `clk_mm_eb`, and the unaided kernel leaves PD_CAMERA reported as ON
+  (DBG_6 = 0) while ISP/DCAM already read off. That is why the provider in
+  0005/0006 never bound and AP/PUB deep-sleep counters stayed at 0 during
+  real 20 s and 44 s suspends.
 - Verified on the Rongyue E5 only: GPU and camera domains off across suspend
   let `AP_DEEP_SLEEP_CNT` advance (0 -> 1 -> 2), with the stock PD_INFO
   snapshot at suspend.
-- Not verified on Changxing 60: whether its DT has the
-  `sprd,qogirl6l-camsys-domain` node (the provider simply does not bind when
-  it is absent), whole-board suspend survival, wake latency, and any battery
-  figure. Deep sleep stays disabled (`deep_min=0`) until the controlled
-  test in `docs/SUSPEND-PATCHES-20261121.zh-CN.md` passes on the device.
+- Not verified on Changxing 60: whether 0007 makes the counters advance,
+  whole-board suspend survival, wake latency, and any battery figure. Deep
+  sleep stays disabled (`deep_min=0`) until the controlled test in
+  `docs/SUSPEND-PATCHES-20261121.zh-CN.md` passes on the device.
 
 These patches do not initiate suspend, change hotspot policy, disable IPv6,
 change polling intervals, or keep eMMC awake. They only affect the corresponding

@@ -6,8 +6,8 @@ explicit make-probe options. No 41S SGM41513 address remap, ST7123 firmware
 or AW883xx amplifier is inherited.
 
 The system-suspend stack under common/power is applied to the donor kernel
-after the board preparation. 0006 is an increment on 0004/0005, so the order
-is not interchangeable.
+after the board preparation. 0006 is an increment on 0004/0005 and 0007 is
+an increment on 0006, so the order is not interchangeable.
 """
 from pathlib import Path
 import runpy
@@ -21,6 +21,7 @@ POWER_PATCHES=(
     '0004-drm-panfrost-sprd-power-the-GPU-off-across-system-su.patch',
     '0005-soc-sprd-add-the-UMS9621-camera-subsystem-power-doma.patch',
     '0006-sprd-stock-power-sequence-and-error-unwind.patch',
+    '0007-soc-sprd-bind-the-UMS9620-camera-power-domain.patch',
 )
 
 
