@@ -7,6 +7,26 @@
 
 ## 未发布
 
+相较上一正式版 `changxing60-openwrt-25.12.5-r20261125.061629-gfbc2bb93-s8176974d-k6.18.54`，本次变更如下。
+
+### 1. 修复畅行60 相机电源域未绑定导致不进深睡
+
+- 新增系统挂起补丁 0007：让相机电源域提供者匹配本机 DT 节点 `sprd,qogirn6pro-camsys-domain`，开机即关断 PD_CAMERA，并在挂起期间保持关闭。
+- 真机已验证：`sprd-camsys-pd` 成功绑定，DBG_6=`0x07000000`、DBG_7=`0x00070007`，相机、ISP、DCAM 均关闭；一次 59.5 秒 RTC 挂起完整走完，`AP_DEEP_SLEEP_CNT` 2→3。
+
+### 2. 修复重复“充电器不在线”通知提前唤醒系统
+
+- 新增系统挂起补丁 0008：`sprd_vchg_detect.c` 只在充电在线状态真正变化时持有 `sprd_vchg_wakelock`；重复的“仍不在线”通知继续通知充电管理，但不再拿 1000 ms 唤醒锁。
+- 真实插拔充电器的唤醒行为保持不变，PD hard-reset 路径不变；不改射频、热点、轮询或 eMMC 策略。
+- 真机已验证修复前的阻断：三次受控挂起均在关闭 secondary CPU 后约 1.65 秒提前恢复，唤醒源记录到 `sprd_vchg_wakelock`。0008 随本版发布，修复后的整夜耗电收益仍待真机 A/B 验证。
+
+### 3. 回归测试
+
+- 新增 `devices/changxing60/test_suspend_patches.py`：验证 0008 可干净应用和反向应用、唤醒锁仅由在线状态变化触发、充电管理通知仍保留，以及补丁在畅行60 准备流程中位于最后。
+- CI 测试步已加入该回归测试。
+
+## 历史记录（r20261125）
+
 ### 1. 新增“仅连接设备时开启基带”按需联网省电选项（畅行60 默认开启）
 
 - `openwrt/overlay/usr/libexec/e5-power-state`：新增 `wake_on_client` 策略项（畅行60 在 `/usr/share/e5-power/defaults.json` 中默认开启 `true`；老配置升级缺失该字段时自动继承板级默认值，用户手动关闭则严格保留）。

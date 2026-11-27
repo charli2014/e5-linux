@@ -137,6 +137,7 @@ jobs:
           python3 devices/test_power_state.py
           python3 devices/test_staging.py
           python3 devices/changxing60/test_screen_defaults.py
+          python3 devices/changxing60/test_suspend_patches.py
           python3 openwrt/tests/image-keep-config.py
           python3 openwrt/tests/update-device-files.py
           python3 tools/tests/ci-release.py
@@ -240,6 +241,8 @@ jobs:
         id: collect
         env:
           BOOTSTRAP_SHA256: ${{ steps.bootstrap.outputs.sha256 }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           # Assemble runs under sudo, so the release tree is root-owned; the
@@ -251,7 +254,13 @@ jobs:
           stem=$(basename "$zip" .zip)
           (cd "$dir" && sha256sum ./*.zip > SHA256SUMS)
           if [ "$GITHUB_EVENT_NAME" = push ]; then tag="$GITHUB_REF_NAME"; else tag="$stem"; fi
-          python3 tools/release-changes.py > "$RUNNER_TEMP/changes.md"
+          previous=$(gh release list --exclude-pre-releases --exclude-drafts --limit 1 \
+            --json tagName --jq '.[0].tagName // empty')
+          if [ -n "$previous" ]; then
+            python3 tools/release-changes.py --since "$previous" > "$RUNNER_TEMP/changes.md"
+          else
+            python3 tools/release-changes.py > "$RUNNER_TEMP/changes.md"
+          fi
           python3 - "$dir" "$stem" "$RUNNER_TEMP/changes.md" <<'EOF'
           import json, os, sys
           from pathlib import Path

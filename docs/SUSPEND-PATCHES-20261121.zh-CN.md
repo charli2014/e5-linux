@@ -1,23 +1,30 @@
 # 畅行60 系统挂起补丁栈（2026-11-21）
 
-机型：畅行60（P720S20，UMS9620）。本文说明 `devices/common/power/` 下五个
+机型：畅行60（P720S20，UMS9620）。本文说明 `devices/common/power/` 下七个
 挂起补丁的内容、接线方式和真机受控试验步骤。默认 `deep_min=0`（深睡禁用）
 不变；试验通过后再由用户调大。
 
 ## 结论先行
 
-- 六个补丁已接入畅行60内核准备流程（`devices/changxing60/prepare-kernel.py`），
+- 七个补丁已接入畅行60内核准备流程（`devices/changxing60/prepare-kernel.py`），
   CI 内核 job 会真实编译它们。
-- 已核实：补丁顺序为 0001→0002→0004→0005→0006→0007，对登记的供体内核
+- 已核实：补丁顺序为 0001→0002→0004→0005→0006→0007→0008，对登记的供体内核
   `Enceka/linux-lts-e5@020b970e` 都能干净应用；0006 是 0004/0005 的增量，
-  0007 是 0006 的增量。
+  0007 是 0006 的增量，0008 是 0007 的增量。
 - 已核实（仅 E5 实测）：相机域和 GPU 域在挂起时关断后，AP 才能进 PMU
   深睡（`AP_DEEP_SLEEP_CNT` 0→1→2）。
-- 已核实（畅行60 只读测量，2026-11-26）：本机 DT 的相机节点是
-  `sprd,qogirn6pro-camsys-domain`，九个寄存器三元组和 `clk_mm_eb` 齐全；
-  而未加 0007 时该驱动不绑定，PD_CAMERA 一直报告为开（DBG_6=0），
-  两次真实挂起（20 s、44 s）里 AP/PUB 深睡计数都没有增加。0007 就是补这一条。
-- 未核实：0007 刷机后计数是否前进、畅行60 真机挂起存活、唤醒时延、电量收益。
+- 已核实（畅行60 真机，2026-11-27）：刷入 0007 后相机提供者绑定，DBG_6 为
+  `0x07000000`（相机关闭）；一次 59.5 s RTC 挂起完整走完（IRQ 23），
+  `AP_DEEP_SLEEP_CNT` 2→3。另有三次试验在关闭 secondary CPU 后立即恢复，
+  实际只挂起约 1.65 s，不能算完整深睡。
+- 已核实第二个阻断：上述提前恢复时，`wakeup_sources` 记录到
+  `sprd_vchg_wakelock` 与电池/FGU 活动；dmesg 记录 `sprd-ssphy` 的
+  `vbus off` / `usb_charger_absent`，随后 `sprd_vchg` 仍报告
+  `charger online = 0`。供体 `sprd_vchg_detect.c` 对每次通知无条件持有
+  1000 ms 唤醒锁，重复的“充电器不在线”通知会打断挂起。0008 已针对这一
+  路径修复，但尚未在畅行60 真机上验证。
+- 未核实：整夜耗电收益。60 s 的 `charge_counter` 差值粒度过粗，300 s 试验
+  又被上述充电唤醒提前打断，两者都不作为电量结论。
 - 不做：不改射频/热点策略、不改轮询、不主动发起挂起、不动 eMMC。
 
 ## 为什么需要这组补丁
@@ -43,6 +50,7 @@
 | 0005 | `sprd_camsys_pd.c`（新增） | 把 DT 的 `sprd,qogirl6l-camsys-domain` 注册成 genpd，开机即关相机域 | 相机域常亮，AP 进不了深睡 |
 | 0006 | `sprd_camsys_pd.c`、`panfrost_sprd.c`、Kconfig | 按 E5 原厂 qogirn6l 时序重写 DCAM/ISP/TOP 三档关断（force/automatic/state、300–350 µs、连续三次读一致、最多 30 次）；GPU 上电任一步失败整体回滚；相机提供者改为内建 | 关断时序与厂商不一致，失败路径半上电 |
 | 0007 | `sprd_camsys_pd.c` | 让相机提供者也匹配畅行60 的节点名 `sprd,qogirn6pro-camsys-domain` | 驱动不绑定，相机域常亮，AP 进不了深睡 |
+| 0008 | `sprd_vchg_detect.c` | 只在充电在线状态真实变化时持有 `sprd_vchg_wakelock`；重复的“仍不在线”通知不再拿 1000 ms 唤醒锁 | 重复 absent 通知在 CPU hotplug 后提前唤醒系统，真实挂起只能维持约 1.65 s |
 
 细节与逐行说明见 `devices/common/power/README.md`。
 
@@ -53,7 +61,7 @@
 
 - 补丁按固定顺序从 `devices/common/power/` 读入，CRLF 归一化后通过
   `git apply -` 应用，Windows 工作区和 Linux CI 行为一致。
-- 幂等：若 0007 已能反向应用，说明整套已打上，直接返回；被复用的本机
+- 幂等：若 0008 已能反向应用，说明整套已打上，直接返回；被复用的本机
   内核视图不会重复打补丁。
 - 任一步失败立即 `SystemExit` 并打印 `git apply` 的 stderr，不会带着半套
   补丁继续编译。
@@ -68,6 +76,7 @@
 0005-soc-sprd-add-the-UMS9621-camera-subsystem-power-doma.patch
 0006-sprd-stock-power-sequence-and-error-unwind.patch
 0007-soc-sprd-bind-the-UMS9620-camera-power-domain.patch
+0008-power-sprd-vchg-ignore-duplicate-absent-wakeup.patch
 ```
 
 ## 配置前提
@@ -136,11 +145,12 @@ CI 入口不变：`.github/workflows/changxing60-release.yml`，内核 job 调�
   `sprd,qogirn6pro-camsys-domain` 两个节点名。畅行60 的节点已确认是后者，
   九个寄存器三元组与 `clk_mm_eb` 均存在；0007 只加这一条匹配，不改时序。
 - DT 里另有几个 `power-domains = <&mm_domain>` 的消费者（dcam、isp、cpp、
-  vdsp 等）。本机镜像没有这些相机驱动，理论上不会把它们拉起来；刷机后仍需
-  用 DBG_6/DBG_7 读数确认相机域在开机和挂起后保持关闭。
-- E5 的 `AP_DEEP_SLEEP_CNT`（PMU APB `0xdfc`）读法未移植到畅行60；
-  本机第一步只以“挂起不重启 + 唤醒正常”为判据，计数器读数需要另行接
-  只读调试通道。
+  vdsp 等）。本机镜像没有这些相机驱动，理论上不会把它们拉起来；刷机后已用
+  DBG_6=`0x07000000`、DBG_7=`0x00070007` 确认相机、ISP、DCAM 均保持关闭。
+- `AP_DEEP_SLEEP_CNT`（PMU APB `0xdfc`）已可在畅行60 通过只读 debugfs 读取，
+  但它在 CPU hotplug 阶段提前终止的挂起中也会加一，不能单独作为“完整深睡”
+  判据；必须同时核对挂起时长、RTC 唤醒 IRQ 和唤醒源。`PUB_DEEP_SLEEP_CNT`
+  （`0xe60`）本轮始终为 0，原因尚未确定。
 - 0004 打开 `GPU_PM_CLK_DIS` 只影响 sprd Mali 数据；其它平台的 panfrost
   路径不变。
 - 供体内核是公开的 `Enceka/linux-lts-e5`；补丁来源是

@@ -1,0 +1,41 @@
+Subject: [PATCH] power: sprd_vchg: avoid duplicate absent suspend aborts
+
+The USB PHY can repeat usb_charger_absent while the charger is already
+offline. sprd_vchg_change() currently takes sprd_vchg_wakelock for 1000 ms
+on every notification, so a duplicate absent event can abort an otherwise
+valid system suspend before the final sleep phase.
+
+Only take the wake lock when the charger-online state actually changes.
+Duplicate notifications still notify charger-manager, and real plug/unplug
+transitions keep their existing wake behaviour. PD hard-reset handling is
+unchanged.
+
+--- a/drivers/power/supply/sprd_vchg_detect.c
++++ b/drivers/power/supply/sprd_vchg_detect.c
+@@ -89,6 +89,7 @@
+ {
+ 	struct sprd_vchg_info *info = container_of(nb, struct sprd_vchg_info, usb_notify);
+ 	bool chgr_online = false;
++	bool chgr_online_changed;
+ 
+ 	if (!info) {
+ 		pr_err("%s:line%d: NULL pointer!!!\n", SPRD_VCHG_TAG, __LINE__);
+@@ -101,6 +102,8 @@
+ 	if (info->usb_phy->chg_state == USB_CHARGER_PRESENT)
+ 		chgr_online = true;
+ 
++	chgr_online_changed = info->chgr_online != chgr_online;
++
+ 	if (!info->pd_hard_reset) {
+ 		info->chgr_online = chgr_online;
+ 		if (info->typec_online) {
+@@ -109,7 +112,8 @@
+ 				 SPRD_VCHG_TAG);
+ 		}
+ 
+-		__pm_wakeup_event(info->sprd_vchg_ws, SPRD_VCHG_WAKE_UP_MS);
++		if (chgr_online_changed)
++			__pm_wakeup_event(info->sprd_vchg_ws, SPRD_VCHG_WAKE_UP_MS);
+ 		schedule_work(&info->sprd_vchg_work);
+ 	} else {
+ 		info->pd_hard_reset = false;

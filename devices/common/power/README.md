@@ -17,18 +17,21 @@ licenses. Credit: CharlesGool.
   `sprd,qogirn6pro-camsys-domain`, from which the driver already reads the
   force/automatic/state triples and `clk_mm_eb`. Without it the bootloader's
   PD_CAMERA stays powered on Changxing 60 and the provider never probes.
+- 0008 keeps `sprd_vchg_wakelock` limited to real charger-online transitions.
+  Duplicate charger-absent notifications still reach charger-manager but no
+  longer take a 1000 ms wake lock and abort suspend while already offline.
 
 ## Order and wiring
 
-The files apply in the order above; 0006 is an increment on 0004 and 0005 and
-0007 on 0006, so do not reorder them. `devices/changxing60/prepare-kernel.py`
-feeds them to `git apply` after the board preparation, with CRLF normalized,
-and skips the stack when 0007 already reverses. They are not applied to any
-other profile.
+The files apply in the order above; 0006 is an increment on 0004 and 0005,
+0007 on 0006, and 0008 on 0007, so do not reorder them.
+`devices/changxing60/prepare-kernel.py` feeds them to `git apply` after the board
+preparation, with CRLF normalized, and skips the stack when 0008 already
+reverses. They are not applied to any other profile.
 
 The stack was checked against the registered donor commit
-`Enceka/linux-lts-e5@020b970e` (0004/0005/0006 as before; 0007 applies and
-reverses on top of 0006).
+`Enceka/linux-lts-e5@020b970e` (0004/0005/0006 as before; 0007 and 0008 apply
+and reverse on top of the preceding stack).
 
 ## Kernel configuration
 
@@ -52,10 +55,20 @@ symbol is kept instead of being dropped as unknown.
 - Verified on the Rongyue E5 only: GPU and camera domains off across suspend
   let `AP_DEEP_SLEEP_CNT` advance (0 -> 1 -> 2), with the stock PD_INFO
   snapshot at suspend.
-- Not verified on Changxing 60: whether 0007 makes the counters advance,
-  whole-board suspend survival, wake latency, and any battery figure. Deep
-  sleep stays disabled (`deep_min=0`) until the controlled test in
-  `docs/SUSPEND-PATCHES-20261121.zh-CN.md` passes on the device.
+- Verified on Changxing 60 hardware (2026-11-27): after flashing 0007,
+  `sprd-camsys-pd` binds and DBG_6 reads `0x07000000` (camera off). A 59.5 s
+  RTC suspend completed with IRQ 23, and `AP_DEEP_SLEEP_CNT` advanced 2 -> 3.
+- Verified limitation: `AP_DEEP_SLEEP_CNT` also advances on attempts that abort
+  during CPU hotplug, so it is not sufficient evidence by itself. Three
+  controlled attempts resumed after about 1.65 s. `wakeup_sources` showed
+  `sprd_vchg_wakelock` plus battery/FGU activity, and dmesg showed a duplicate
+  charger-absent notification (`charger online = 0`) from `sprd-ssphy`. The
+  donor `sprd_vchg_detect.c` holds that source for 1000 ms on every notification.
+  0008 removes that wake lock for duplicate offline notifications; the fix is
+  included in the next build but is not yet verified on Changxing 60 hardware.
+- Not verified on Changxing 60: whole-night battery life. The 60 s charge-counter
+  delta is too coarse for a current figure, and the 300 s attempt was cut short
+  by the charger wakeup, so neither is used as a battery result.
 
 These patches do not initiate suspend, change hotspot policy, disable IPv6,
 change polling intervals, or keep eMMC awake. They only affect the corresponding
